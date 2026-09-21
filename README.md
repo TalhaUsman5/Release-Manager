@@ -58,13 +58,37 @@ can't publish, a rejected pack is terminal, etc.).
 
 ```bash
 cd release-manager-review-ui
-GITHUB_TOKEN=... node server.js
+GITHUB_TOKEN=... REVIEW_UI_USERNAME=... REVIEW_UI_PASSWORD=... PUBLIC_ORIGIN=http://127.0.0.1:3000 node server.js
 ```
 
-Serves on `http://127.0.0.1:3000` — a status page, one form/button per
-CLI action, and `/audit` for the run history. Loopback-only by design (no
-external network exposure), with an origin check on every action route to
-reject cross-origin requests from another page.
+`GITHUB_TOKEN`, `REVIEW_UI_USERNAME`, `REVIEW_UI_PASSWORD`, and
+`PUBLIC_ORIGIN` are all required — the server fails fast at startup if
+any is missing. Every route requires HTTP Basic Auth
+(`REVIEW_UI_USERNAME`/`REVIEW_UI_PASSWORD`), and every request's `Host`
+header must match either `PUBLIC_ORIGIN` or `http://127.0.0.1:<port>`
+(the loopback exception always applies, for local development).
+
+Serves on `http://127.0.0.1:3000` by default — a status page, one
+form/button per CLI action, and `/audit` for the run history.
+`LISTEN_HOST` and `PORT` are optional overrides for hosting behind a
+platform that requires binding to `0.0.0.0` (see "Hosting" below).
+
+### Hosting
+
+A `Dockerfile`, `.dockerignore`, and `fly.toml` at the repo root deploy
+this to [Fly.io](https://fly.io). `fly.toml` sets `LISTEN_HOST=0.0.0.0`
+and points the CLI's state file (`RELEASE_MANAGER_STATE_FILE`) at a
+mounted persistent volume, so workflow state survives redeploys.
+`GITHUB_TOKEN`, `REVIEW_UI_USERNAME`, `REVIEW_UI_PASSWORD`, and
+`PUBLIC_ORIGIN` are never in `fly.toml` — set them with `fly secrets
+set` against the deployed app.
+
+**Known limitation:** `audit-log.jsonl` has no equivalent path override
+today, so it lives inside the container's own filesystem and resets on
+each redeploy — only `.release-manager.json` (workflow state) persists
+across deploys via the mounted volume. Accepted for now; a future
+Shipyard feature request could add an `AUDIT_LOG_PATH` override
+following the same pattern as `RELEASE_MANAGER_STATE_FILE`.
 
 ## Tests
 

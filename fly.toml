@@ -1,0 +1,32 @@
+# Fly.io app config for the Release Manager review console.
+# GITHUB_TOKEN, REVIEW_UI_USERNAME, REVIEW_UI_PASSWORD, and PUBLIC_ORIGIN
+# are NOT set here — they're real credentials and must be set via
+# `fly secrets set`, never committed to this file or the repo.
+app = "release-manager-review"
+primary_region = "iad"
+
+[build]
+
+[env]
+  LISTEN_HOST = "0.0.0.0"
+  PORT = "3000"
+  # Points the CLI's state file at the mounted volume instead of its
+  # default (next to release-manager.js, inside the image, which a
+  # redeploy would wipe). release-manager.js already supports this
+  # override natively — no code change needed for state persistence.
+  RELEASE_MANAGER_STATE_FILE = "/data/.release-manager.json"
+
+[[mounts]]
+  source = "release_manager_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
