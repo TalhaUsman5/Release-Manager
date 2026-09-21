@@ -75,3 +75,4 @@ cd ../release-manager-review-ui && npm test
 
 Both suites run entirely against mocked GitHub/subprocess boundaries — no
 real network access or GitHub credentials required to run them.
+To learn more about shipyard, go to: https://github.com/TalhaUsman5/Shipyard/blob/main/shipyard_dossier.html
