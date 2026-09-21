@@ -75,20 +75,44 @@ platform that requires binding to `0.0.0.0` (see "Hosting" below).
 
 ### Hosting
 
-A `Dockerfile`, `.dockerignore`, and `fly.toml` at the repo root deploy
-this to [Fly.io](https://fly.io). `fly.toml` sets `LISTEN_HOST=0.0.0.0`
-and points the CLI's state file (`RELEASE_MANAGER_STATE_FILE`) at a
-mounted persistent volume, so workflow state survives redeploys.
-`GITHUB_TOKEN`, `REVIEW_UI_USERNAME`, `REVIEW_UI_PASSWORD`, and
-`PUBLIC_ORIGIN` are never in `fly.toml` — set them with `fly secrets
-set` against the deployed app.
+Two deploy targets are provided; both are optional and the app doesn't
+care which one runs it.
 
-**Known limitation:** `audit-log.jsonl` has no equivalent path override
-today, so it lives inside the container's own filesystem and resets on
-each redeploy — only `.release-manager.json` (workflow state) persists
-across deploys via the mounted volume. Accepted for now; a future
-Shipyard feature request could add an `AUDIT_LOG_PATH` override
-following the same pattern as `RELEASE_MANAGER_STATE_FILE`.
+**Render (`render.yaml`) — deployed here, no payment method required.**
+A [Render](https://render.com) Blueprint connects directly to this
+GitHub repo (Render dashboard → New → Blueprint), auto-detects
+`render.yaml`, and deploys on the free tier. Render injects `PORT`
+itself; `LISTEN_HOST=0.0.0.0` in the blueprint is what makes the app
+actually bind to it. `GITHUB_TOKEN`, `REVIEW_UI_USERNAME`,
+`REVIEW_UI_PASSWORD`, and `PUBLIC_ORIGIN` are marked `sync: false` in
+the blueprint — set their real values in the Render dashboard's
+Environment tab, never in the repo. `PUBLIC_ORIGIN` can only be set
+correctly *after* the first deploy, once Render assigns the
+`*.onrender.com` URL.
+
+**Known limitations on Render's free tier:**
+- No persistent disk on the free plan — both `.release-manager.json`
+  (workflow state) and `audit-log.jsonl` (audit trail) live in the
+  container's own filesystem and are expected to reset on every
+  redeploy. Whether they also reset on the free tier's idle
+  spin-down/spin-up cycle (distinct from a redeploy) is unverified —
+  confirm this live once deployed rather than assuming either way.
+- Free-tier services spin down after a period of inactivity and take a
+  few seconds to spin back up on the next request (a visible delay on
+  the first hit after idling, not a failure).
+
+**Fly.io (`Dockerfile`, `.dockerignore`, `fly.toml`) — the alternative,
+if a payment method is acceptable.** Fly requires a card on file even
+for free-tier-eligible usage. `fly.toml` sets `LISTEN_HOST=0.0.0.0` and
+points the CLI's state file (`RELEASE_MANAGER_STATE_FILE`) at a mounted
+persistent volume, so workflow state (though still not the audit log —
+same limitation as above, no path override exists yet) survives
+redeploys, unlike Render's free tier. Secrets are set with `fly secrets
+set` against the deployed app, never committed.
+
+A future Shipyard feature request could add an `AUDIT_LOG_PATH`
+override, following the same pattern as `RELEASE_MANAGER_STATE_FILE`,
+to close this gap on both platforms.
 
 ## Tests
 

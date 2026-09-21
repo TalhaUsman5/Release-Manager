@@ -1,0 +1,26 @@
+# Render Blueprint for the review console's free tier — no payment
+# method required. Render auto-injects PORT; LISTEN_HOST=0.0.0.0 here
+# is what makes the app actually bind to it instead of loopback.
+#
+# GITHUB_TOKEN, REVIEW_UI_USERNAME, REVIEW_UI_PASSWORD, and
+# PUBLIC_ORIGIN are `sync: false` — real credentials, set manually in
+# the Render dashboard, never committed to this file or the repo.
+services:
+  - type: web
+    name: release-manager-review
+    runtime: node
+    plan: free
+    branch: main
+    buildCommand: "true"
+    startCommand: "node release-manager-review-ui/server.js"
+    envVars:
+      - key: LISTEN_HOST
+        value: "0.0.0.0"
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: REVIEW_UI_USERNAME
+        sync: false
+      - key: REVIEW_UI_PASSWORD
+        sync: false
+      - key: PUBLIC_ORIGIN
+        sync: false
