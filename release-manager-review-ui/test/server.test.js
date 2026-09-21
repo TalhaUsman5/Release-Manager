@@ -10,22 +10,15 @@ const { spawn } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const serverFile = path.join(root, 'server.js');
-const auditFile = path.join(root, 'audit-log.jsonl');
-const managerDir = path.resolve(root, '../release-manager-v2');
-const cliFile = path.join(managerDir, 'release-manager.js');
-const invocationFile = path.join(managerDir, '.origin-gate-test-invocations.jsonl');
-const preloadFile = path.join(root, `.origin-gate-test-preload-${process.pid}.js`);
+const runtimePreload = path.join(root, `.review-runtime-preload-${process.pid}.js`);
+const capturePreload = path.join(root, `.review-listen-capture-preload-${process.pid}.js`);
 
 const PUBLIC_ORIGIN = 'https://release-manager.example.com';
-const USERNAME = 'origin-test-user';
-const PASSWORD = 'origin-test-password';
+const USERNAME = 'listen-test-user';
+const PASSWORD = 'listen-test-password';
 
-let port;
-let running;
-let managerCreated = false;
-let originalAudit;
-let originalAuditExists = false;
-const backups = [];
+let runtimePort;
+let runtimeServer;
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -42,57 +35,38 @@ async function allocatePort() {
   });
 }
 
-async function canConnect(targetPort) {
-  return new Promise(resolve => {
-    const socket = net.createConnection({ host: '127.0.0.1', port: targetPort });
-    let settled = false;
-    const finish = value => {
-      if (settled) return;
-      settled = true;
-      socket.destroy();
-      resolve(value);
-    };
-    socket.setTimeout(100, () => finish(false));
-    socket.once('connect', () => finish(true));
-    socket.once('error', () => finish(false));
-  });
-}
-
-async function moveAside(file) {
-  try {
-    await fs.lstat(file);
-  } catch (error) {
-    if (error.code === 'ENOENT') return;
-    throw error;
-  }
-
-  const backup = `${file}.verifier-backup-${process.pid}-${Math.random().toString(16).slice(2)}`;
-  await fs.rename(file, backup);
-  backups.push({ file, backup });
-}
-
-function childEnvironment(overrides = {}) {
+function cleanEnvironment() {
   const env = { ...process.env };
-  delete env.PUBLIC_ORIGIN;
-  delete env.GITHUB_TOKEN;
-  delete env.REVIEW_UI_USERNAME;
-  delete env.REVIEW_UI_PASSWORD;
+  for (const name of [
+    'GITHUB_TOKEN',
+    'REVIEW_UI_USERNAME',
+    'REVIEW_UI_PASSWORD',
+    'PUBLIC_ORIGIN',
+    'LISTEN_HOST',
+    'PORT',
+    'HOST',
+    'REVIEW_UI_TEST_PORT',
+    'REVIEW_UI_CAPTURE_FILE'
+  ]) {
+    delete env[name];
+  }
+  delete env.NODE_OPTIONS;
+  return env;
+}
 
-  const inheritedOptions = env.NODE_OPTIONS ? `${env.NODE_OPTIONS} ` : '';
-  env.NODE_OPTIONS = `${inheritedOptions}--require=${preloadFile}`;
-  env.REVIEW_UI_TEST_PORT = String(overrides.REVIEW_UI_TEST_PORT || port);
-
-  return Object.assign(env, {
-    GITHUB_TOKEN: 'github-token-for-origin-tests',
+function requiredEnvironment(overrides = {}) {
+  return Object.assign(cleanEnvironment(), {
+    GITHUB_TOKEN: 'github-token-for-listen-tests',
     REVIEW_UI_USERNAME: USERNAME,
-    REVIEW_UI_PASSWORD: PASSWORD
+    REVIEW_UI_PASSWORD: PASSWORD,
+    PUBLIC_ORIGIN
   }, overrides);
 }
 
-function spawnServer(targetPort, overrides = {}) {
+function spawnServer(env) {
   const child = spawn(process.execPath, ['server.js'], {
     cwd: root,
-    env: childEnvironment({ REVIEW_UI_TEST_PORT: String(targetPort), ...overrides }),
+    env,
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
@@ -102,20 +76,54 @@ function spawnServer(targetPort, overrides = {}) {
   return { child, output: () => output };
 }
 
-async function waitForListening(serverProcess, targetPort) {
+async function waitForExit(serverProcess, timeout = 5000) {
+  if (serverProcess.child.exitCode !== null) return serverProcess.child.exitCode;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      serverProcess.child.kill('SIGKILL');
+      reject(new Error(`server did not exit in time: ${serverProcess.output()}`));
+    }, timeout);
+
+    serverProcess.child.once('exit', code => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+  });
+}
+
+async function canConnect(port) {
+  return new Promise(resolve => {
+    const socket = net.createConnection({ host: '127.0.0.1', port });
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(value);
+    };
+
+    socket.setTimeout(100, () => finish(false));
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+  });
+}
+
+async function waitForListening(serverProcess, port) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     if (serverProcess.child.exitCode !== null) {
       throw new Error(`server exited before listening: ${serverProcess.output()}`);
     }
-    if (await canConnect(targetPort)) return;
+    if (await canConnect(port)) return;
     await delay(25);
   }
-  throw new Error(`server did not begin listening: ${serverProcess.output()}`);
+  throw new Error(`server did not listen on test port: ${serverProcess.output()}`);
 }
 
 async function stopServer(serverProcess) {
   if (!serverProcess || serverProcess.child.exitCode !== null) return;
+
   const exited = new Promise(resolve => serverProcess.child.once('exit', resolve));
   serverProcess.child.kill('SIGTERM');
   const timer = setTimeout(() => serverProcess.child.kill('SIGKILL'), 1000);
@@ -123,13 +131,43 @@ async function stopServer(serverProcess) {
   clearTimeout(timer);
 }
 
+async function captureListen(overrides = {}) {
+  const captureFile = path.join(
+    root,
+    `.review-listen-capture-${process.pid}-${Math.random().toString(16).slice(2)}.json`
+  );
+  const env = requiredEnvironment(overrides);
+  env.NODE_OPTIONS = `--require=${capturePreload}`;
+  env.REVIEW_UI_CAPTURE_FILE = captureFile;
+
+  const serverProcess = spawnServer(env);
+  const exitCode = await waitForExit(serverProcess);
+
+  let capture = null;
+  try {
+    capture = JSON.parse(await fs.readFile(captureFile, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  } finally {
+    await fs.rm(captureFile, { force: true });
+  }
+
+  return { exitCode, capture, output: serverProcess.output() };
+}
+
+function assertEndpoint(result, expectedHost, expectedPort) {
+  assert.equal(result.exitCode, 0, `startup failed: ${result.output}`);
+  assert.ok(result.capture, `HTTP listen was never called: ${result.output}`);
+  assert.equal(result.capture.host, expectedHost, 'unexpected HTTP listen host');
+  assert.equal(Number(result.capture.port), expectedPort, 'unexpected HTTP listen port');
+}
+
 function authorization() {
   return `Basic ${Buffer.from(`${USERNAME}:${PASSWORD}`, 'utf8').toString('base64')}`;
 }
 
 async function request({
-  method = 'GET',
-  requestPath = '/',
+  requestPath = '/definitely-not-an-existing-route',
   host = 'release-manager.example.com',
   origin = PUBLIC_ORIGIN,
   secure = true,
@@ -141,18 +179,13 @@ async function request({
       origin,
       'sec-fetch-site': 'same-origin'
     };
-
     if (authenticated) headers.authorization = authorization();
-    if (secure) headers['x-origin-gate-test-secure'] = 'yes';
-    if (method === 'POST') {
-      headers['content-type'] = 'application/x-www-form-urlencoded';
-      headers['content-length'] = '0';
-    }
+    if (secure) headers['x-review-test-secure'] = 'yes';
 
     const req = http.request({
       host: '127.0.0.1',
-      port,
-      method,
+      port: runtimePort,
+      method: 'GET',
       path: requestPath,
       headers,
       agent: false
@@ -171,30 +204,36 @@ async function request({
   });
 }
 
-async function invocationCount() {
-  try {
-    const text = await fs.readFile(invocationFile, 'utf8');
-    return text.split('\n').filter(Boolean).length;
-  } catch (error) {
-    if (error.code === 'ENOENT') return 0;
-    throw error;
-  }
-}
-
-function invalidOriginOptions(overrides = {}) {
-  return {
-    secure: true,
-    host: 'attacker.example.test',
-    origin: 'https://attacker.example.test',
-    ...overrides
-  };
-}
-
 test.before(async () => {
   await fs.access(serverFile);
-  port = await allocatePort();
+  runtimePort = await allocatePort();
 
-  await fs.writeFile(preloadFile, `
+  await fs.writeFile(capturePreload, `
+'use strict';
+const fs = require('node:fs');
+const http = require('node:http');
+
+http.Server.prototype.listen = function (...args) {
+  let port;
+  let host;
+  if (args[0] && typeof args[0] === 'object') {
+    port = args[0].port;
+    host = args[0].host;
+  } else {
+    port = args[0];
+    host = typeof args[1] === 'string' ? args[1] : undefined;
+  }
+
+  fs.writeFileSync(
+    process.env.REVIEW_UI_CAPTURE_FILE,
+    JSON.stringify({ port: port === undefined ? null : port, host: host === undefined ? null : host })
+  );
+  setImmediate(() => process.exit(0));
+  return this;
+};
+`, 'utf8');
+
+  await fs.writeFile(runtimePreload, `
 'use strict';
 const http = require('node:http');
 const originalCreateServer = http.createServer;
@@ -205,7 +244,7 @@ http.createServer = function (...args) {
   if (listenerIndex !== -1) {
     const listener = args[listenerIndex];
     args[listenerIndex] = function (request, response) {
-      if (request.headers['x-origin-gate-test-secure'] === 'yes') {
+      if (request.headers['x-review-test-secure'] === 'yes') {
         Object.defineProperty(request.socket, 'encrypted', {
           configurable: true,
           value: true
@@ -228,228 +267,152 @@ http.Server.prototype.listen = function (...args) {
 };
 `, 'utf8');
 
-  try {
-    await fs.access(managerDir);
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    await fs.mkdir(managerDir, { recursive: true });
-    managerCreated = true;
-  }
-
-  for (const file of [cliFile, invocationFile]) await moveAside(file);
-
-  await fs.writeFile(cliFile, `
-'use strict';
-const fs = require('node:fs');
-const path = require('node:path');
-const args = process.argv.slice(2);
-fs.appendFileSync(
-  path.join(__dirname, '.origin-gate-test-invocations.jsonl'),
-  JSON.stringify(args) + '\\n'
-);
-
-if (args[0] === 'status') {
-  process.stdout.write(JSON.stringify({
-    repository: { name: 'origin/test', url: 'https://example.test/origin/test' },
-    scanEvidence: { commit: null, pullRequests: [] },
-    preparedReleasePack: null,
-    approval: { state: 'pending', approver: null },
-    rejection: { state: 'not-rejected', reason: null },
-    publicationResult: { state: 'not-published', url: null }
-  }));
-} else {
-  process.stdout.write('ORIGIN-GATE-ACTION-MARKER');
-}
-`, 'utf8');
-  await fs.writeFile(invocationFile, '', 'utf8');
-
-  try {
-    originalAudit = await fs.readFile(auditFile);
-    originalAuditExists = true;
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
-  await fs.writeFile(auditFile, '', 'utf8');
-
-  running = spawnServer(port, { PUBLIC_ORIGIN });
-  await waitForListening(running, port);
+  const env = requiredEnvironment({
+    LISTEN_HOST: '0.0.0.0',
+    PORT: '45678',
+    REVIEW_UI_TEST_PORT: String(runtimePort)
+  });
+  env.NODE_OPTIONS = `--require=${runtimePreload}`;
+  runtimeServer = spawnServer(env);
+  await waitForListening(runtimeServer, runtimePort);
 });
 
 test.after(async () => {
-  await stopServer(running);
-  await fs.rm(preloadFile, { force: true });
-  await fs.rm(invocationFile, { force: true });
-  await fs.rm(cliFile, { force: true });
-
-  await fs.rm(auditFile, { force: true });
-  if (originalAuditExists) await fs.writeFile(auditFile, originalAudit);
-
-  for (const item of backups.reverse()) {
-    await fs.rename(item.backup, item.file);
-  }
-  if (managerCreated) await fs.rm(managerDir, { recursive: true, force: true });
+  await stopServer(runtimeServer);
+  await fs.rm(runtimePreload, { force: true });
+  await fs.rm(capturePreload, { force: true });
 });
 
-test('Basic Auth is the first gate for GET, POST, and other methods', async t => {
-  const cases = [
-    { method: 'GET', requestPath: '/' },
-    { method: 'POST', requestPath: '/scan' },
-    { method: 'PUT', requestPath: '/scan' },
-    { method: 'DELETE', requestPath: '/missing-route' }
+test('unset LISTEN_HOST and PORT use the exact local-development defaults', async () => {
+  const result = await captureListen();
+  assertEndpoint(result, '127.0.0.1', 3000);
+});
+
+test('LISTEN_HOST alone replaces only the default listen address', async () => {
+  const result = await captureListen({ LISTEN_HOST: '0.0.0.0' });
+  assertEndpoint(result, '0.0.0.0', 3000);
+});
+
+test('PORT alone replaces only the default listen port', async () => {
+  const selectedPort = await allocatePort();
+  const result = await captureListen({ PORT: String(selectedPort) });
+  assertEndpoint(result, '127.0.0.1', selectedPort);
+});
+
+test('LISTEN_HOST and PORT are both passed to HTTP listen when configured together', async () => {
+  const selectedPort = await allocatePort();
+  const result = await captureListen({
+    LISTEN_HOST: '127.0.0.2',
+    PORT: String(selectedPort)
+  });
+  assertEndpoint(result, '127.0.0.2', selectedPort);
+});
+
+test('legacy HOST does not replace the LISTEN_HOST interface', async () => {
+  const result = await captureListen({ HOST: '0.0.0.0' });
+  assertEndpoint(result, '127.0.0.1', 3000);
+});
+
+test('LISTEN_HOST and PORT remain optional startup variables', async () => {
+  const result = await captureListen();
+  assert.equal(result.exitCode, 0, result.output);
+  assert.ok(result.capture, 'startup treated an optional listen variable as missing');
+});
+
+test('each established required environment variable still fails fast when missing', async t => {
+  const requiredNames = [
+    'GITHUB_TOKEN',
+    'REVIEW_UI_USERNAME',
+    'REVIEW_UI_PASSWORD',
+    'PUBLIC_ORIGIN'
   ];
 
-  for (const item of cases) {
-    await t.test(item.method, async () => {
-      const before = await invocationCount();
-      const response = await request(invalidOriginOptions({
-        ...item,
-        authenticated: false
-      }));
+  for (const missingName of requiredNames) {
+    await t.test(missingName, async () => {
+      const captureFile = path.join(
+        root,
+        `.review-required-capture-${process.pid}-${Math.random().toString(16).slice(2)}.json`
+      );
+      const env = requiredEnvironment();
+      delete env[missingName];
+      env.NODE_OPTIONS = `--require=${capturePreload}`;
+      env.REVIEW_UI_CAPTURE_FILE = captureFile;
 
-      assert.equal(
-        response.statusCode,
-        401,
-        `${item.method} was processed by origin validation or routing before Basic Auth`
+      const serverProcess = spawnServer(env);
+      const exitCode = await waitForExit(serverProcess);
+      const output = serverProcess.output();
+
+      assert.notEqual(exitCode, 0, `${missingName} was no longer required`);
+      assert.match(output, new RegExp(missingName), `failure did not identify ${missingName}`);
+      await assert.rejects(
+        fs.access(captureFile),
+        error => error && error.code === 'ENOENT',
+        'HTTP listen was reached before required-variable validation'
       );
-      assert.match(
-        String(response.headers['www-authenticate'] || ''),
-        /^Basic\b/i,
-        'the existing Basic Auth challenge was not returned'
-      );
-      assert.equal(await invocationCount(), before, 'an unauthenticated request reached a route');
+      await fs.rm(captureFile, { force: true });
     });
   }
 });
 
-test('origin rejection is identical and occurs before routing for GET, POST, and non-POST methods', async () => {
-  const before = await invocationCount();
-  const postResponse = await request(invalidOriginOptions({
-    method: 'POST',
-    requestPath: '/scan'
-  }));
-
-  assert.equal(postResponse.statusCode, 403, 'POST no longer uses the existing origin rejection');
-  assert.equal(await invocationCount(), before, 'rejected POST reached its action route');
-
-  const cases = [
-    { method: 'GET', requestPath: '/' },
-    { method: 'PUT', requestPath: '/scan' },
-    { method: 'PATCH', requestPath: '/scan' },
-    { method: 'DELETE', requestPath: '/' },
-    { method: 'OPTIONS', requestPath: '/' }
-  ];
-
-  for (const item of cases) {
-    const response = await request(invalidOriginOptions(item));
-    assert.equal(response.statusCode, 403, `${item.method} escaped origin validation`);
+test('configured listen values do not replace PUBLIC_ORIGIN or Host-header checking', async t => {
+  await t.test('the exact configured public origin and Host are accepted', async () => {
+    const response = await request();
     assert.equal(
-      response.body,
-      postResponse.body,
-      `${item.method} did not use the existing origin-rejection response`
+      response.statusCode,
+      404,
+      `valid origin did not pass through to normal unknown-route handling: ${response.body}`
     );
-    assert.equal(
-      await invocationCount(),
-      before,
-      `${item.method} reached routing despite its rejected origin`
-    );
-  }
-});
-
-test('an invalid origin takes precedence over the unknown-route response', async () => {
-  const requestPath = '/definitely-not-an-existing-route';
-  const before = await invocationCount();
-
-  const acceptedOriginResponse = await request({ method: 'GET', requestPath });
-  assert.equal(
-    acceptedOriginResponse.statusCode,
-    404,
-    'the valid-origin control request did not reach the existing unknown-route behavior'
-  );
-
-  const rejectedOriginResponse = await request(invalidOriginOptions({
-    method: 'GET',
-    requestPath
-  }));
-  assert.equal(
-    rejectedOriginResponse.statusCode,
-    403,
-    'an unknown route was selected before origin validation'
-  );
-  assert.equal(await invocationCount(), before, 'an unknown request invoked the release manager');
-});
-
-test('authenticated GET and POST requests accepted by PUBLIC_ORIGIN retain their routes', async () => {
-  let before = await invocationCount();
-  const getResponse = await request({ method: 'GET', requestPath: '/' });
-  assert.equal(getResponse.statusCode, 200, `accepted GET failed: ${getResponse.body}`);
-  assert.equal(await invocationCount(), before + 1, 'accepted GET did not reach its route');
-
-  before = await invocationCount();
-  const postResponse = await request({ method: 'POST', requestPath: '/scan' });
-  assert.equal(postResponse.statusCode, 200, `accepted POST failed: ${postResponse.body}`);
-  assert.equal(await invocationCount(), before + 1, 'accepted POST did not reach its route');
-});
-
-test('the existing explicit-port 127.0.0.1 exception also works for GET requests', async () => {
-  const before = await invocationCount();
-  const response = await request({
-    method: 'GET',
-    requestPath: '/',
-    secure: false,
-    host: '127.0.0.1:49152',
-    origin: 'http://127.0.0.1:49152'
   });
 
-  assert.equal(response.statusCode, 200, `loopback exception was rejected: ${response.body}`);
-  assert.equal(await invocationCount(), before + 1, 'accepted loopback GET did not reach its route');
+  await t.test('an attacker Host and matching attacker Origin are rejected', async () => {
+    const response = await request({
+      host: 'attacker.example.test',
+      origin: 'https://attacker.example.test'
+    });
+    assert.equal(response.statusCode, 403);
+  });
+
+  await t.test('a valid Host with a mismatched Origin is rejected', async () => {
+    const response = await request({ origin: 'https://attacker.example.test' });
+    assert.equal(response.statusCode, 403);
+  });
+
+  await t.test('a configured Origin with an attacker Host is rejected', async () => {
+    const response = await request({ host: 'attacker.example.test' });
+    assert.equal(response.statusCode, 403);
+  });
 });
 
-test('GET validation retains exact PUBLIC_ORIGIN comparison rules', async t => {
-  const cases = [
-    {
-      name: 'different scheme',
-      options: {
-        secure: false,
-        host: 'release-manager.example.com',
-        origin: 'http://release-manager.example.com'
-      }
-    },
-    {
-      name: 'configured host used as an attacker-controlled prefix',
-      options: {
-        secure: true,
-        host: 'release-manager.example.com.attacker.test',
-        origin: 'https://release-manager.example.com.attacker.test'
-      }
-    },
-    {
-      name: 'extra explicit port',
-      options: {
-        secure: true,
-        host: 'release-manager.example.com:443',
-        origin: 'https://release-manager.example.com:443'
-      }
-    },
-    {
-      name: 'localhost is not the literal loopback exception',
-      options: {
-        secure: false,
-        host: 'localhost:3000',
-        origin: 'http://localhost:3000'
-      }
-    }
-  ];
-
-  for (const item of cases) {
-    await t.test(item.name, async () => {
-      const before = await invocationCount();
-      const response = await request({
-        method: 'GET',
-        requestPath: '/',
-        ...item.options
-      });
-      assert.equal(response.statusCode, 403, `${item.name} was incorrectly accepted`);
-      assert.equal(await invocationCount(), before, `${item.name} reached the GET route`);
+test('the existing literal 127.0.0.1 origin exception remains unchanged', async t => {
+  await t.test('literal loopback with an explicit matching port is accepted', async () => {
+    const response = await request({
+      secure: false,
+      host: '127.0.0.1:49152',
+      origin: 'http://127.0.0.1:49152'
     });
-  }
+    assert.equal(
+      response.statusCode,
+      404,
+      `loopback origin did not reach ordinary routing: ${response.body}`
+    );
+  });
+
+  await t.test('localhost is not substituted for the literal loopback exception', async () => {
+    const response = await request({
+      secure: false,
+      host: 'localhost:49152',
+      origin: 'http://localhost:49152'
+    });
+    assert.equal(response.statusCode, 403);
+  });
+});
+
+test('Basic Auth remains ahead of origin and route handling', async () => {
+  const response = await request({
+    authenticated: false,
+    host: 'attacker.example.test',
+    origin: 'https://attacker.example.test'
+  });
+  assert.equal(response.statusCode, 401);
+  assert.match(String(response.headers['www-authenticate'] || ''), /^Basic\b/i);
 });

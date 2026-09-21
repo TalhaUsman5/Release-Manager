@@ -8,6 +8,8 @@ const { spawn } = require('child_process');
 
 const HOST = '127.0.0.1';
 const PORT = 3000;
+const LISTEN_HOST = process.env.LISTEN_HOST === undefined ? HOST : process.env.LISTEN_HOST;
+const LISTEN_PORT = process.env.PORT === undefined ? PORT : process.env.PORT;
 const CLI_EXECUTABLE = 'node';
 const CLI_CWD = path.resolve(__dirname, '../release-manager-v2');
 const AUDIT_PATH = path.join(__dirname, 'audit-log.jsonl');
@@ -455,7 +457,7 @@ server.on('error', error => {
   console.error(`Server error: ${error && error.stack ? error.stack : error}`);
   process.exitCode = 1;
 });
-server.listen(PORT, HOST, () => {
+server.listen(LISTEN_PORT, LISTEN_HOST, () => {
   const address = server.address();
-  console.log(`Release Manager Review UI listening on http://${HOST}:${address.port}`);
+  console.log(`Release Manager Review UI listening on http://${LISTEN_HOST}:${address.port}`);
 });
