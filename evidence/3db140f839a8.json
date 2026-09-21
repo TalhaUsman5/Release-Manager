@@ -1,0 +1,895 @@
+{
+  "id": "3db140f839a8",
+  "feature_request": "Improve the Release Manager review console's visual design and usability without changing any behavior, routes, or the CLI-invocation logic. Specifically: replace the current plain HTML with a proper light/dark-aware visual design (color palette, spacing, typography) using only inline CSS in server.js's existing layout() function; give each of the seven actions (Configure, Scan, Prepare, Recover, Approve, Reject, Publish) a distinct visual affordance (icon or color) reflecting whether it's safe, cautionary, or destructive; show a persistent status indicator (last exit code, last action, timestamp) in the page header/nav so the operator doesn't have to scroll to /audit to see recent activity; and improve the process-result page so stdout/stderr are visually distinguished from each other and collapsible when long, instead of two flat <pre> blocks. Do not add any client-side JavaScript, external stylesheets, or frameworks \u2014 all styling must remain inline CSS shipped with the existing server-rendered HTML, consistent with the current zero-dependency, no-build-step design.",
+  "project_path": "release-manager-review-ui",
+  "started_at": 1789991334.600887,
+  "status": "completed",
+  "current_node": "calibrate",
+  "budgets": {
+    "test_retry": 1,
+    "review_retry": 2
+  },
+  "budget_grants": {},
+  "nodes": {
+    "plan": {
+      "status": "succeeded",
+      "attempts": 1,
+      "output": {
+        "title": "Refresh the Release Manager review console presentation and activity visibility",
+        "description": "Update the existing server-rendered review console with an embedded light/dark-aware design, distinct action affordances, a layout-wide recent-activity indicator, and clearer collapsible process output while preserving all existing behavior, routes, and CLI invocation logic.",
+        "requirements": [
+          "R1: Replace the console's plain presentation with a coherent visual design covering color palette, spacing, and typography.",
+          "R2: Implement all visual styling as CSS embedded by server.js's existing layout() function so every page using that layout receives the design.",
+          "R3: Make the embedded design light/dark-aware, including an appropriate dark palette selected through CSS such as the prefers-color-scheme media query.",
+          "R4: Give each of Configure, Scan, Prepare, Recover, Approve, Reject, and Publish its own visually distinguishable affordance using an icon, color, or both.",
+          "R5: The action affordances must communicate safe, cautionary, or destructive intent. The feature request does not prescribe the exact risk-category assignment, icon, or color for every action; those choices must remain consistent with each action's existing meaning, and actions in the same risk category must still be individually distinguishable.",
+          "R6: Render a persistent recent-activity indicator in the shared page header or navigation area showing the last action, its exit code, and its timestamp.",
+          "R7: When recorded activity exists, the indicator must display the values from the most recent established activity result rather than requiring the operator to visit or scroll through /audit.",
+          "R8: When no recorded activity exists, the header or navigation must still contain a non-misleading empty-state status indicator rather than presenting invented action, exit-code, or timestamp values.",
+          "R9: On process-result pages, present stdout and stderr as separately labeled and visually distinct streams rather than as two undifferentiated flat preformatted blocks.",
+          "R10: Long stdout and stderr content must be independently collapsible using server-rendered native HTML controls, such as separate details/summary elements, so no client-side JavaScript is required. The request does not specify the exact length threshold; it must be deterministic, and clearly large content must receive the collapsible treatment.",
+          "R11: Preserve the actual stdout and stderr text shown to the operator, including the existing escaping and output semantics; the change is to presentation and collapsibility only.",
+          "R12: Preserve all existing application behavior, route paths, accepted request shapes, action semantics, CLI arguments, CLI argument ordering, subprocess invocation logic, result handling, and audit behavior."
+        ],
+        "constraints": [
+          "C1: Changes are limited to server.js.",
+          "C2: CSS must be shipped inside the existing server-rendered HTML through layout(); no external stylesheet may be introduced.",
+          "C3: Do not add client-side JavaScript.",
+          "C4: Do not add frameworks, packages, build tools, or runtime dependencies; retain the current zero-dependency, no-build-step design.",
+          "C5: Do not add, remove, rename, or redirect routes.",
+          "C6: Do not alter the logic that maps the seven actions to CLI invocations, including executable selection, argument-array contents or ordering, working-directory behavior, or environment handling.",
+          "C7: Do not alter action execution, process-result, error, or audit semantics while changing the generated HTML presentation.",
+          "C8: The exact colors, icons, typography values, spacing values, timestamp format, no-activity wording, and long-output threshold are not specified by the request and must not be treated as fixed interfaces beyond satisfying the stated visual and informational requirements."
+        ],
+        "acceptance_criteria": [
+          "AC1 [R1, R2, R3, C2]: HTML produced through layout() contains an embedded style element defining the console's palette, spacing, and typography, plus a light/dark-aware CSS rule; rendered pages do not reference an external stylesheet.",
+          "AC2 [R4, R5]: The rendered controls for Configure, Scan, Prepare, Recover, Approve, Reject, and Publish each have an observable, individually distinguishable icon and/or color treatment, and their styling visibly differentiates safe, cautionary, and destructive intent.",
+          "AC3 [R6, R7]: After an action has a recorded result, every relevant page rendered through the shared layout\u2014including the resulting process page and /audit\u2014shows a header or navigation status area containing that most recent action's action name, exit code, and timestamp.",
+          "AC4 [R8]: With no recorded activity available, pages rendered through the shared layout still show a status area that clearly indicates the absence of recent activity and does not fabricate an exit code or timestamp.",
+          "AC5 [R9, R11]: A process result containing both stdout and stderr renders two clearly labeled regions with visibly different presentation, and each region contains the corresponding original escaped stream text without swapping or merging the streams.",
+          "AC6 [R10, C3]: For a process result whose stdout and stderr are each clearly large, each stream is independently contained in a native server-rendered collapsible control with a visible summary or label; expanding or collapsing one stream does not require JavaScript or control the other stream.",
+          "AC7 [R12, C5, C6, C7]: All pre-existing route and action tests continue to pass, and the seven actions retain their existing request handling, CLI argument arrays and ordering, result outcomes, and audit effects.",
+          "AC8 [C2, C3, C4]: server.js introduces no external CSS or script references, client-side script, framework import, package dependency, or build-step requirement.",
+          "AC9 [C1]: The implementation changes no project file other than server.js."
+        ],
+        "out_of_scope": [
+          "Changing CLI workflow or invocation logic.",
+          "Adding, removing, renaming, or otherwise changing routes.",
+          "Changing action behavior, process execution semantics, or audit semantics.",
+          "Adding client-side interactivity implemented with JavaScript.",
+          "Adding external stylesheets, UI frameworks, packages, dependencies, or a build step.",
+          "Redesigning the CLI itself.",
+          "Defining a new exact public programmatic interface; this feature changes only the existing server-rendered presentation."
+        ],
+        "target_files": [
+          "server.js"
+        ]
+      },
+      "tokens": {
+        "input": 1427,
+        "output": 2510
+      },
+      "error": null
+    },
+    "plan_review": {
+      "status": "succeeded",
+      "attempts": 1,
+      "output": {
+        "approved": true,
+        "feedback": null,
+        "reviewed_by": null
+      },
+      "tokens": null,
+      "error": null
+    },
+    "build": {
+      "status": "succeeded",
+      "attempts": 3,
+      "output": {
+        "files": [
+          {
+            "path": "server.js",
+            "content": "'use strict';\n\nconst http = require('http');\nconst path = require('path');\nconst fs = require('fs');\nconst { spawn } = require('child_process');\n\nconst HOST = '127.0.0.1';\nconst PORT = 3000;\nconst CLI_EXECUTABLE = 'node';\nconst CLI_CWD = path.resolve(__dirname, '../release-manager-v2');\nconst AUDIT_PATH = path.join(__dirname, 'audit-log.jsonl');\nconst COLLAPSIBLE_OUTPUT_THRESHOLD = 2000;\n\nfunction escapeHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction renderTextWithLinks(value) {\n  const text = String(value);\n  const urlPattern = /https?:\\/\\/[^\\s<>]+/g;\n  let result = '';\n  let position = 0;\n  let match;\n\n  while ((match = urlPattern.exec(text)) !== null) {\n    result += escapeHtml(text.slice(position, match.index));\n    const url = match[0];\n    result += `<a href=\"${escapeHtml(url)}\" target=\"_blank\" rel=\"noopener noreferrer\">${escapeHtml(url)}</a>`;\n    position = match.index + url.length;\n  }\n\n  result += escapeHtml(text.slice(position));\n  return result;\n}\n\nfunction humanizeKey(key) {\n  return String(key)\n    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')\n    .replace(/[_-]+/g, ' ')\n    .replace(/^./, character => character.toUpperCase());\n}\n\nfunction renderValue(value) {\n  if (value === null) return '<span class=\"null\">null</span>';\n  if (value === undefined) return '<em>Not provided by status output</em>';\n\n  if (Array.isArray(value)) {\n    if (value.length === 0) return '<span class=\"empty\">[]</span>';\n    return `<ol>${value.map(item => `<li>${renderValue(item)}</li>`).join('')}</ol>`;\n  }\n\n  if (typeof value === 'object') {\n    const entries = Object.entries(value);\n    if (entries.length === 0) return '<span class=\"empty\">{}</span>';\n    return `<dl>${entries.map(([key, item]) =>\n      `<dt>${escapeHtml(humanizeKey(key))}</dt><dd>${renderValue(item)}</dd>`\n    ).join('')}</dl>`;\n  }\n\n  if (typeof value === 'string') return renderTextWithLinks(value);\n  return escapeHtml(String(value));\n}\n\nfunction normalizeKey(key) {\n  return String(key).replace(/[^a-z0-9]/gi, '').toLowerCase();\n}\n\nfunction findStatusValue(root, candidateKeys) {\n  const wanted = new Set(candidateKeys.map(normalizeKey));\n  const visited = new Set();\n\n  function visit(value) {\n    if (!value || typeof value !== 'object' || visited.has(value)) return undefined;\n    visited.add(value);\n\n    for (const [key, child] of Object.entries(value)) {\n      if (wanted.has(normalizeKey(key))) return child;\n    }\n    for (const child of Object.values(value)) {\n      const found = visit(child);\n      if (found !== undefined) return found;\n    }\n    return undefined;\n  }\n\n  return visit(root);\n}\n\nfunction readRecentActivity() {\n  let contents;\n  try {\n    contents = fs.readFileSync(AUDIT_PATH, 'utf8');\n  } catch (error) {\n    if (error && error.code === 'ENOENT') return null;\n    return { unavailable: true };\n  }\n\n  const lines = contents.split(/\\n/);\n  for (let index = lines.length - 1; index >= 0; index -= 1) {\n    if (lines[index].length === 0) continue;\n\n    let entry;\n    try {\n      entry = JSON.parse(lines[index]);\n    } catch (_error) {\n      continue;\n    }\n\n    const args = entry && entry.command && entry.command.arguments;\n    const result = entry && entry.result;\n    if (!Array.isArray(args) || typeof args[1] !== 'string' ||\n        typeof entry.timestamp !== 'string' || !result ||\n        !Object.prototype.hasOwnProperty.call(result, 'exitCode')) {\n      continue;\n    }\n\n    return {\n      action: humanizeKey(args[1]),\n      exitCode: result.exitCode,\n      timestamp: entry.timestamp\n    };\n  }\n\n  return null;\n}\n\nfunction renderRecentActivity() {\n  const activity = readRecentActivity();\n  if (activity === null) {\n    return '<div class=\"activity activity-empty\" role=\"status\"><span class=\"activity-label\">Recent activity</span><span>No actions recorded yet</span></div>';\n  }\n  if (activity.unavailable === true) {\n    return '<div class=\"activity activity-unavailable\" role=\"status\"><span class=\"activity-label\">Recent activity</span><span>Recent activity unavailable</span></div>';\n  }\n\n  const outcomeClass = activity.exitCode === 0 ? 'activity-success' : 'activity-failure';\n  return `<div class=\"activity ${outcomeClass}\" role=\"status\">\n    <span class=\"activity-label\">Recent activity</span>\n    <span class=\"activity-item\"><strong>Action:</strong> ${escapeHtml(activity.action)}</span>\n    <span class=\"activity-item\"><strong>Exit code:</strong> ${activity.exitCode === null ? 'null' : escapeHtml(activity.exitCode)}</span>\n    <span class=\"activity-item\"><strong>Timestamp:</strong> <time datetime=\"${escapeHtml(activity.timestamp)}\">${escapeHtml(activity.timestamp)}</time></span>\n  </div>`;\n}\n\nfunction layout(title, body) {\n  return `<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>${escapeHtml(title)}</title>\n<style>\n  :root {\n    color-scheme: light dark;\n    --page: #f4f7fb;\n    --surface: #ffffff;\n    --surface-subtle: #eef3f8;\n    --text: #172033;\n    --muted: #5b6577;\n    --border: #ccd5e1;\n    --link: #1559b7;\n    --focus: #2563eb;\n    --success: #18794e;\n    --success-soft: #e5f6ed;\n    --warning: #9a5b00;\n    --warning-soft: #fff3d6;\n    --danger: #b42332;\n    --danger-soft: #fdebed;\n    --stdout: #176b45;\n    --stdout-soft: #edf9f2;\n    --stderr: #a2303d;\n    --stderr-soft: #fff0f1;\n    --shadow: 0 8px 24px rgba(26, 39, 61, .08);\n  }\n\n  * { box-sizing: border-box; }\n  html { background: var(--page); }\n  body {\n    max-width: 1120px;\n    margin: 0 auto;\n    padding: 0 1.25rem 3rem;\n    font: 16px/1.55 system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;\n    color: var(--text);\n    background: var(--page);\n  }\n  a { color: var(--link); text-underline-offset: .18em; }\n  a:hover { text-decoration-thickness: .14em; }\n  a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {\n    outline: 3px solid var(--focus);\n    outline-offset: 2px;\n  }\n  .site-header {\n    position: relative;\n    margin: 0 -1.25rem 2rem;\n    padding: 1rem 1.25rem;\n    background: var(--surface);\n    border-bottom: 1px solid var(--border);\n    box-shadow: var(--shadow);\n  }\n  nav {\n    display: flex;\n    flex-wrap: wrap;\n    align-items: center;\n    gap: .5rem 1.25rem;\n    margin-bottom: .85rem;\n  }\n  nav a { font-weight: 700; text-decoration: none; }\n  .brand { margin-right: auto; color: var(--text); font-size: 1.05rem; }\n  .activity {\n    display: flex;\n    flex-wrap: wrap;\n    align-items: center;\n    gap: .4rem 1rem;\n    padding: .7rem .85rem;\n    border: 1px solid var(--border);\n    border-left: .3rem solid var(--muted);\n    border-radius: .5rem;\n    background: var(--surface-subtle);\n    color: var(--muted);\n    font-size: .9rem;\n  }\n  .activity-label { color: var(--text); font-weight: 800; }\n  .activity-success { border-left-color: var(--success); background: var(--success-soft); }\n  .activity-failure { border-left-color: var(--danger); background: var(--danger-soft); }\n  .activity-unavailable { border-left-color: var(--warning); background: var(--warning-soft); }\n  .activity-item { white-space: normal; }\n  main { min-width: 0; }\n  section {\n    border: 1px solid var(--border);\n    border-radius: .65rem;\n    padding: 1rem 1.1rem;\n    margin: 1rem 0;\n    background: var(--surface);\n    box-shadow: var(--shadow);\n  }\n  h1, h2, h3 { line-height: 1.2; color: var(--text); }\n  h1 { margin: 0 0 .65rem; font-size: clamp(1.8rem, 4vw, 2.45rem); letter-spacing: -.025em; }\n  h2 { margin-top: 1.5rem; font-size: 1.35rem; }\n  section > h2:first-child, section > h3:first-child { margin-top: 0; }\n  dl { margin: .4rem 0; }\n  dt { font-weight: 750; margin-top: .65rem; color: var(--text); }\n  dd { margin-left: 1.25rem; overflow-wrap: anywhere; }\n  ol { padding-left: 1.5rem; }\n  pre {\n    margin: .65rem 0 0;\n    padding: .9rem;\n    border: 1px solid var(--border);\n    border-radius: .4rem;\n    background: var(--surface-subtle);\n    color: var(--text);\n    white-space: pre-wrap;\n    overflow-wrap: anywhere;\n    overflow-x: auto;\n    font: .9rem/1.5 ui-monospace, SFMono-Regular, Consolas, \"Liberation Mono\", monospace;\n  }\n  form { display: grid; gap: .8rem; margin: .8rem 0 0; }\n  label { display: grid; gap: .35rem; font-weight: 650; }\n  input, select, button {\n    min-height: 2.55rem;\n    border: 1px solid var(--border);\n    border-radius: .4rem;\n    font: inherit;\n    padding: .45rem .65rem;\n  }\n  input, select { width: 100%; color: var(--text); background: var(--surface); }\n  button {\n    cursor: pointer;\n    border-color: transparent;\n    color: #fff;\n    font-weight: 800;\n    box-shadow: 0 2px 5px rgba(0, 0, 0, .15);\n  }\n  button:hover { filter: brightness(.94); }\n  button:active { transform: translateY(1px); }\n  .error { color: var(--danger); font-weight: 750; }\n  .meta { color: var(--muted); }\n  .null, .empty { color: var(--muted); font-family: ui-monospace, monospace; }\n  .actions {\n    display: grid;\n    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));\n    gap: 1rem;\n  }\n  .actions section {\n    margin: 0;\n    border-top: .3rem solid var(--action-color);\n  }\n  .actions h3 { display: flex; align-items: center; gap: .55rem; }\n  .action-icon { font-size: 1.25em; }\n  .actions button { background: var(--action-color); }\n  .action-configure { --action-color: #2563a9; }\n  .action-scan { --action-color: #087f8c; }\n  .action-prepare { --action-color: #a86300; }\n  .action-recover { --action-color: #7552a8; }\n  .action-approve { --action-color: #18794e; }\n  .action-reject { --action-color: #b42332; }\n  .action-publish { --action-color: #c44f13; }\n  .stream {\n    box-shadow: none;\n    margin: 1rem 0;\n    border-left-width: .35rem;\n  }\n  .stream h3 { margin-bottom: .55rem; }\n  .stream-stdout { border-left-color: var(--stdout); background: var(--stdout-soft); }\n  .stream-stderr { border-left-color: var(--stderr); background: var(--stderr-soft); }\n  .stream-stdout h3, .stream-stdout summary { color: var(--stdout); }\n  .stream-stderr h3, .stream-stderr summary { color: var(--stderr); }\n  details.stream {\n    border: 1px solid var(--border);\n    border-left-width: .35rem;\n    border-radius: .65rem;\n    padding: 0;\n    overflow: hidden;\n  }\n  details.stream > summary {\n    cursor: pointer;\n    padding: .85rem 1rem;\n    font-weight: 800;\n  }\n  details.stream[open] > summary { border-bottom: 1px solid var(--border); }\n  details.stream > pre { margin: 1rem; }\n  .stream-size { margin-left: .45rem; color: var(--muted); font-size: .82rem; font-weight: 500; }\n\n  @media (max-width: 600px) {\n    body { padding-inline: .75rem; }\n    .site-header { margin-inline: -.75rem; padding-inline: .75rem; }\n    .activity { align-items: flex-start; flex-direction: column; }\n    dd { margin-left: .5rem; }\n  }\n\n  @media (prefers-color-scheme: dark) {\n    :root {\n      --page: #0e1522;\n      --surface: #172131;\n      --surface-subtle: #202c3d;\n      --text: #e8edf5;\n      --muted: #aab5c6;\n      --border: #3b485b;\n      --link: #8fc2ff;\n      --focus: #72a7ff;\n      --success: #62d49b;\n      --success-soft: #153c2d;\n      --warning: #f0bd65;\n      --warning-soft: #443316;\n      --danger: #ff8995;\n      --danger-soft: #4b2028;\n      --stdout: #6bd7a2;\n      --stdout-soft: #15372b;\n      --stderr: #ff929d;\n      --stderr-soft: #432229;\n      --shadow: 0 8px 24px rgba(0, 0, 0, .22);\n    }\n    .action-configure { --action-color: #397fc3; }\n    .action-scan { --action-color: #168f9b; }\n    .action-prepare { --action-color: #a96a0e; }\n    .action-recover { --action-color: #8060b2; }\n    .action-approve { --action-color: #23875a; }\n    .action-reject { --action-color: #bd3543; }\n    .action-publish { --action-color: #bd521e; }\n  }\n</style>\n</head>\n<body>\n<header class=\"site-header\">\n  <nav aria-label=\"Primary navigation\"><a class=\"brand\" href=\"/\">Release Manager Review</a><a href=\"/\">Release status</a><a href=\"/audit\">Audit history</a></nav>\n  ${renderRecentActivity()}\n</header>\n<main>\n${body}\n</main>\n</body>\n</html>`;\n}\n\nfunction sendHtml(response, statusCode, title, body) {\n  const document = layout(title, body);\n  response.writeHead(statusCode, {\n    'Content-Type': 'text/html; charset=utf-8',\n    'Content-Length': Buffer.byteLength(document),\n    'Cache-Control': 'no-store'\n  });\n  response.end(document);\n}\n\nfunction runCli(args) {\n  return new Promise(resolve => {\n    let stdout = '';\n    let stderr = '';\n    let child;\n    let settled = false;\n\n    const finish = result => {\n      if (settled) return;\n      settled = true;\n      resolve(result);\n    };\n\n    try {\n      child = spawn(CLI_EXECUTABLE, args, {\n        cwd: CLI_CWD,\n        env: process.env,\n        stdio: ['ignore', 'pipe', 'pipe']\n      });\n    } catch (error) {\n      finish({\n        exitCode: null,\n        stdout,\n        stderr,\n        error: error && error.message ? error.message : String(error)\n      });\n      return;\n    }\n\n    child.stdout.on('data', chunk => { stdout += chunk.toString(); });\n    child.stderr.on('data', chunk => { stderr += chunk.toString(); });\n\n    child.once('error', error => {\n      finish({\n        exitCode: null,\n        stdout,\n        stderr,\n        error: error && error.message ? error.message : String(error)\n      });\n    });\n\n    child.once('close', code => {\n      finish({\n        exitCode: typeof code === 'number' ? code : null,\n        stdout,\n        stderr,\n        error: null\n      });\n    });\n  });\n}\n\nfunction renderProcessStream(name, value) {\n  const stream = String(value);\n  const escaped = escapeHtml(stream);\n  const streamClass = name === 'stdout' ? 'stream-stdout' : 'stream-stderr';\n\n  if (stream.length > COLLAPSIBLE_OUTPUT_THRESHOLD) {\n    return `<details class=\"stream ${streamClass}\">\n      <summary>${name}<span class=\"stream-size\">${stream.length} characters \u2014 expand output</span></summary>\n      <pre>${escaped}</pre>\n    </details>`;\n  }\n\n  return `<section class=\"stream ${streamClass}\"><h3>${name}</h3><pre>${escaped}</pre></section>`;\n}\n\nfunction renderProcessResult(result) {\n  return `<dl>\n    <dt>Exit code</dt><dd>${result.exitCode === null ? 'null' : escapeHtml(result.exitCode)}</dd>\n    <dt>Start error</dt><dd>${result.error === null ? 'null' : escapeHtml(result.error)}</dd>\n  </dl>\n  ${renderProcessStream('stdout', result.stdout)}\n  ${renderProcessStream('stderr', result.stderr)}`;\n}\n\nfunction appendAudit(args, result) {\n  const entry = {\n    timestamp: new Date().toISOString(),\n    command: {\n      executable: CLI_EXECUTABLE,\n      arguments: args.slice(),\n      cwd: CLI_CWD\n    },\n    result: {\n      exitCode: result.exitCode,\n      stdout: result.stdout,\n      stderr: result.stderr,\n      error: result.error\n    }\n  };\n\n  return new Promise((resolve, reject) => {\n    let line;\n    try {\n      line = `${JSON.stringify(entry)}\\n`;\n    } catch (error) {\n      reject(error);\n      return;\n    }\n    fs.appendFile(AUDIT_PATH, line, { encoding: 'utf8' }, error => {\n      if (error) reject(error);\n      else resolve(entry);\n    });\n  });\n}\n\nfunction readRequestBody(request, maximumBytes = 1024 * 1024) {\n  return new Promise((resolve, reject) => {\n    const chunks = [];\n    let size = 0;\n    let failed = false;\n\n    request.on('data', chunk => {\n      if (failed) return;\n      size += chunk.length;\n      if (size > maximumBytes) {\n        failed = true;\n        reject(new Error('Request body exceeds the maximum allowed size'));\n        return;\n      }\n      chunks.push(chunk);\n    });\n    request.on('end', () => {\n      if (!failed) resolve(Buffer.concat(chunks).toString('utf8'));\n    });\n    request.on('error', error => {\n      if (!failed) {\n        failed = true;\n        reject(error);\n      }\n    });\n  });\n}\n\nfunction renderMainPage(status) {\n  const categories = [\n    ['Repository', ['repository', 'repo']],\n    ['Scan evidence', ['scanEvidence', 'scanResult', 'scan-evidence', 'scan_evidence']],\n    ['Prepared pack', ['preparedPack', 'preparedReleasePack', 'releasePack', 'prepared-pack', 'prepared_pack']],\n    ['Changelog', ['changelog', 'changeLog']],\n    ['Release Notes', ['releaseNotes', 'notes']],\n    ['Announcement', ['announcement']],\n    ['Evidence Links', ['evidenceLinks', 'evidenceUrls']],\n    ['Approval or Rejection State', ['approvalState', 'rejectionState', 'approval', 'rejection', 'decision', 'reviewState', 'approved', 'rejected']],\n    ['Publication Result', ['publicationResult', 'publication', 'publishResult', 'published']]\n  ];\n\n  const sections = categories.map(([heading, keys]) =>\n    `<section><h2>${escapeHtml(heading)}</h2>${renderValue(findStatusValue(status, keys))}</section>`\n  ).join('');\n\n  return `<h1>Release Manager Review</h1>\n  <p class=\"meta\">Workflow state below was obtained from the Release Manager CLI status command.</p>\n  ${sections}\n  <section><h2>Complete Status Output</h2>${renderValue(status)}</section>\n  <h2>Actions</h2>\n  <div class=\"actions\">\n    <section class=\"action-configure\">\n      <h3><span class=\"action-icon\" aria-hidden=\"true\">\u2699</span>Configure</h3>\n      <form method=\"post\" action=\"/configure\" enctype=\"application/x-www-form-urlencoded\">\n        <label>Repository <input type=\"text\" name=\"repo\" placeholder=\"owner/name\" required></label>\n        <button type=\"submit\">Configure</button>\n      </form>\n    </section>\n    <section class=\"action-scan\">\n      <h3><span class=\"action-icon\" aria-hidden=\"true\">\u2315</span>Scan</h3>\n      <form method=\"post\" action=\"/scan\" enctype=\"application/x-www-form-urlencoded\">\n        <button type=\"submit\">Scan</button>\n      </form>\n    </section>\n    <section class=\"action-prepare\">\n      <h3><span class=\"action-icon\" aria-hidden=\"true\">\u25a3</span>Prepare</h3>\n      <form method=\"post\" action=\"/prepare\" enctype=\"application/x-www-form-urlencoded\">\n        <label>Bump\n          <select name=\"bump\">\n            <option value=\"patch\">patch</option>\n            <option value=\"minor\">minor</option>\n            <option value=\"major\">major</option>\n          </select>\n        </label>\n        <button type=\"submit\">Prepare</button>\n      </form>\n    </section>\n    <section class=\"action-recover\">\n      <h3><span class=\"action-icon\" aria-hidden=\"true\">\u21bb</span>Recover</h3>\n      <form method=\"post\" action=\"/recover\" enctype=\"application/x-www-form-urlencoded\">\n        <button type=\"submit\">Recover</button>\n      </form>\n    </section>\n    <section class=\"action-approve\">\n      <h3><span class=\"action-icon\" aria-hidden=\"true\">\u2713</span>Approve</h3>\n      <form method=\"post\" action=\"/approve\" enctype=\"application/x-www-form-urlencoded\">\n        <label>Approver <input type=\"text\" name=\"approver\" required></label>\n        <button type=\"submit\">Approve</button>\n      </form>\n    </section>\n    <section class=\"action-reject\">\n      <h3><span class=\"action-icon\" aria-hidden=\"true\">\u2715</span>Reject</h3>\n      <form method=\"post\" action=\"/reject\" enctype=\"application/x-www-form-urlencoded\">\n        <button type=\"submit\">Reject</button>\n      </form>\n    </section>\n    <section class=\"action-publish\">\n      <h3><span class=\"action-icon\" aria-hidden=\"true\">\u25b2</span>Publish</h3>\n      <form method=\"post\" action=\"/publish\" enctype=\"application/x-www-form-urlencoded\">\n        <button type=\"submit\">Publish</button>\n      </form>\n    </section>\n  </div>`;\n}\n\nasync function handleStatus(response) {\n  const args = ['release-manager.js', 'status'];\n  const result = await runCli(args);\n\n  if (result.error !== null || result.exitCode !== 0) {\n    sendHtml(response, 500, 'Status command failed',\n      `<h1 class=\"error\">Status command failed</h1>\n       <p>The Release Manager status subprocess did not complete successfully.</p>\n       ${renderProcessResult(result)}`);\n    return;\n  }\n\n  let status;\n  try {\n    status = JSON.parse(result.stdout);\n  } catch (error) {\n    sendHtml(response, 500, 'Invalid status JSON',\n      `<h1 class=\"error\">Invalid status JSON</h1>\n       <p>${escapeHtml(error && error.message ? error.message : String(error))}</p>\n       ${renderProcessResult(result)}`);\n    return;\n  }\n\n  sendHtml(response, 200, 'Release Manager Review', renderMainPage(status));\n}\n\nasync function handleAction(response, action, args) {\n  const result = await runCli(args);\n  let auditError = null;\n\n  try {\n    await appendAudit(args, result);\n  } catch (error) {\n    auditError = error;\n  }\n\n  const subprocessFailed = result.error !== null || result.exitCode !== 0;\n  const failed = subprocessFailed || auditError !== null;\n  const auditMessage = auditError\n    ? `<section><h2 class=\"error\">Audit write failed</h2><pre>${escapeHtml(auditError.message || String(auditError))}</pre></section>`\n    : '<p>One result entry was appended to the audit log.</p>';\n\n  sendHtml(response, failed ? 500 : 200, `${action} result`,\n    `<h1>${escapeHtml(action)} Result</h1>\n     ${subprocessFailed ? '<p class=\"error\">The subprocess did not complete successfully.</p>' : '<p>The subprocess completed successfully.</p>'}\n     <section>${renderProcessResult(result)}</section>\n     ${auditMessage}\n     <p><a href=\"/\">Return to release status</a> | <a href=\"/audit\">View audit history</a></p>`);\n}\n\nasync function handleAudit(response) {\n  let contents;\n  try {\n    contents = await fs.promises.readFile(AUDIT_PATH, 'utf8');\n  } catch (error) {\n    if (error.code === 'ENOENT') {\n      contents = '';\n    } else {\n      sendHtml(response, 500, 'Audit read failed',\n        `<h1 class=\"error\">Audit read failed</h1><pre>${escapeHtml(error.message || String(error))}</pre>`);\n      return;\n    }\n  }\n\n  const validEntries = [];\n  for (const line of contents.split(/\\n/)) {\n    if (line.length === 0) continue;\n    try {\n      validEntries.push(JSON.parse(line));\n    } catch (_error) {\n      // Malformed lines are not audit entries and are omitted from the display.\n    }\n  }\n  validEntries.reverse();\n\n  const entries = validEntries.map((entry, index) =>\n    `<section><h2>Entry ${index + 1}</h2>${renderValue(entry)}</section>`\n  ).join('');\n\n  sendHtml(response, 200, 'Audit History',\n    `<h1>Audit History</h1>\n     <p class=\"meta\">Most recently appended entries are shown first.</p>\n     ${entries || '<p>No action entries have been recorded.</p>'}`);\n}\n\nasync function route(request, response) {\n  const url = new URL(request.url, `http://${HOST}:${PORT}`);\n\n  if (request.method === 'GET' && url.pathname === '/') {\n    await handleStatus(response);\n    return;\n  }\n\n  if (request.method === 'GET' && url.pathname === '/audit') {\n    await handleAudit(response);\n    return;\n  }\n\n  if (request.method === 'POST' && url.pathname === '/configure') {\n    const body = await readRequestBody(request);\n    const form = new URLSearchParams(body);\n    const repo = form.get('repo') === null ? '' : form.get('repo');\n    await handleAction(response, 'Configure', ['release-manager.js', 'configure', '--repo', repo]);\n    return;\n  }\n\n  if (request.method === 'POST' && url.pathname === '/scan') {\n    await readRequestBody(request);\n    await handleAction(response, 'Scan', ['release-manager.js', 'scan']);\n    return;\n  }\n\n  if (request.method === 'POST' && url.pathname === '/prepare') {\n    const body = await readRequestBody(request);\n    const form = new URLSearchParams(body);\n    const bump = form.get('bump') === null ? '' : form.get('bump');\n    await handleAction(response, 'Prepare', ['release-manager.js', 'prepare', '--bump', bump]);\n    return;\n  }\n\n  if (request.method === 'POST' && url.pathname === '/recover') {\n    await readRequestBody(request);\n    await handleAction(response, 'Recover', ['release-manager.js', 'recover']);\n    return;\n  }\n\n  if (request.method === 'POST' && url.pathname === '/approve') {\n    const body = await readRequestBody(request);\n    const form = new URLSearchParams(body);\n    const approver = form.get('approver') === null ? '' : form.get('approver');\n    await handleAction(response, 'Approve', ['release-manager.js', 'approve', '--approver', approver]);\n    return;\n  }\n\n  if (request.method === 'POST' && url.pathname === '/reject') {\n    await readRequestBody(request);\n    await handleAction(response, 'Reject', ['release-manager.js', 'reject']);\n    return;\n  }\n\n  if (request.method === 'POST' && url.pathname === '/publish') {\n    await readRequestBody(request);\n    await handleAction(response, 'Publish', ['release-manager.js', 'publish']);\n    return;\n  }\n\n  sendHtml(response, 404, 'Not Found', '<h1>Not Found</h1><p>The requested route does not exist.</p>');\n}\n\nconst server = http.createServer((request, response) => {\n  route(request, response).catch(error => {\n    if (response.headersSent) {\n      response.end();\n      return;\n    }\n    sendHtml(response, 500, 'Request processing failed',\n      `<h1 class=\"error\">Request processing failed</h1><pre>${escapeHtml(error && error.stack ? error.stack : String(error))}</pre>`);\n  });\n});\n\nserver.on('error', error => {\n  console.error(`Server error: ${error && error.stack ? error.stack : error}`);\n  process.exitCode = 1;\n});\nserver.listen(PORT, HOST, () => {\n  const address = server.address();\n  console.log(`Release Manager Review UI listening on http://${HOST}:${address.port}`);\n});\n"
+          }
+        ],
+        "notes": "Distinguishes a missing audit log from other audit read failures; non-ENOENT failures now render a caution-styled \u201cRecent activity unavailable\u201d status instead of the empty-activity message."
+      },
+      "tokens": {
+        "input": 12474,
+        "output": 8057
+      },
+      "error": null
+    },
+    "verify": {
+      "status": "succeeded",
+      "attempts": 2,
+      "output": {
+        "files": [
+          {
+            "path": "test/server.test.js",
+            "content": "'use strict';\n\nconst test = require('node:test');\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst fsp = require('node:fs/promises');\nconst http = require('node:http');\nconst net = require('node:net');\nconst path = require('node:path');\nconst { spawn } = require('node:child_process');\n\nconst root = path.resolve(__dirname, '..');\nconst serverFile = path.join(root, 'server.js');\nconst packageFile = path.join(root, 'package.json');\nconst auditFile = path.join(root, 'audit-log.jsonl');\nconst managerDir = path.resolve(root, '../release-manager-v2');\nconst cliFile = path.join(managerDir, 'release-manager.js');\nconst configFile = path.join(managerDir, '.review-ui-contract-config.json');\nconst invocationFile = path.join(managerDir, '.review-ui-contract-invocations.jsonl');\nconst preloadFile = path.join(root, `.review-ui-contract-preload-${process.pid}.js`);\n\nconst statusObject = {\n  repository: { name: 'octo/release-console', url: 'https://example.test/repository' },\n  scanEvidence: {\n    commit: { sha: 'deadbeef-status', url: 'https://example.test/commit/deadbeef' },\n    pullRequests: [{ number: 417, title: 'Visible status PR', url: 'https://example.test/pull/417' }]\n  },\n  preparedReleasePack: {\n    version: 'v9.8.7-test',\n    changelog: 'visible changelog',\n    releaseNotes: 'visible release notes',\n    announcement: 'visible announcement',\n    evidenceLinks: ['https://example.test/evidence']\n  },\n  approval: { state: 'pending', approver: null },\n  rejection: { state: 'not-rejected', reason: null },\n  publicationResult: { state: 'not-published', url: null }\n};\n\nconst initialAuditEntry = {\n  timestamp: '2025-01-02T03:04:05.000Z',\n  command: {\n    executable: 'node',\n    arguments: ['release-manager.js', 'publish'],\n    cwd: managerDir\n  },\n  result: { exitCode: 0, stdout: 'PREEXISTING-AUDIT-MARKER', stderr: '', error: null }\n};\n\nconst backups = [];\nlet managerCreated = false;\nlet originalAuditExists = false;\nlet originalAudit;\nlet port;\nlet server;\n\nasync function moveAside(file) {\n  try {\n    await fsp.lstat(file);\n  } catch (error) {\n    if (error.code === 'ENOENT') return;\n    throw error;\n  }\n  const backup = `${file}.verifier-backup-${process.pid}-${Math.random().toString(16).slice(2)}`;\n  await fsp.rename(file, backup);\n  backups.push({ file, backup });\n}\n\nfunction defaultConfig() {\n  const config = {};\n  for (const action of ['configure', 'scan', 'prepare', 'recover', 'approve', 'reject', 'publish']) {\n    config[action] = { stdout: `${action}-default-stdout`, stderr: '', exitCode: 0 };\n  }\n  config.status = { stdout: JSON.stringify(statusObject), stderr: '', exitCode: 0 };\n  return config;\n}\n\nasync function writeConfig(overrides = {}) {\n  await fsp.writeFile(configFile, JSON.stringify({ ...defaultConfig(), ...overrides }), 'utf8');\n}\n\nasync function allocatePort() {\n  return new Promise((resolve, reject) => {\n    const listener = net.createServer();\n    listener.once('error', reject);\n    listener.listen(0, '127.0.0.1', () => {\n      const selected = listener.address().port;\n      listener.close(error => error ? reject(error) : resolve(selected));\n    });\n  });\n}\n\nasync function canConnect() {\n  return new Promise(resolve => {\n    const socket = net.createConnection({ host: '127.0.0.1', port });\n    let finished = false;\n    const finish = result => {\n      if (finished) return;\n      finished = true;\n      socket.destroy();\n      resolve(result);\n    };\n    socket.setTimeout(150, () => finish(false));\n    socket.once('connect', () => finish(true));\n    socket.once('error', () => finish(false));\n  });\n}\n\nasync function startServer(environment = {}) {\n  const existing = process.env.NODE_OPTIONS ? `${process.env.NODE_OPTIONS} ` : '';\n  const child = spawn(process.execPath, ['server.js'], {\n    cwd: root,\n    env: {\n      ...process.env,\n      NODE_OPTIONS: `${existing}--require=${preloadFile}`,\n      REVIEW_UI_TEST_PORT: String(port),\n      REVIEW_UI_INHERITED_SENTINEL: 'inherited-verifier-value',\n      ...environment\n    },\n    stdio: ['ignore', 'pipe', 'pipe']\n  });\n  let output = '';\n  child.stdout.on('data', chunk => { output += chunk; });\n  child.stderr.on('data', chunk => { output += chunk; });\n\n  const deadline = Date.now() + 5000;\n  while (Date.now() < deadline) {\n    if (child.exitCode !== null) throw new Error(`server exited early (${child.exitCode}): ${output}`);\n    if (await canConnect()) return child;\n    await new Promise(resolve => setTimeout(resolve, 35));\n  }\n  child.kill('SIGKILL');\n  throw new Error(`server failed to listen: ${output}`);\n}\n\nasync function stopServer(child) {\n  if (!child || child.exitCode !== null) return;\n  const exited = new Promise(resolve => child.once('exit', resolve));\n  child.kill('SIGTERM');\n  const timer = setTimeout(() => child.kill('SIGKILL'), 1000);\n  await exited;\n  clearTimeout(timer);\n}\n\nasync function request(method, pathname, body, headers = {}) {\n  const payload = body === undefined ? null : Buffer.from(body, 'utf8');\n  return new Promise((resolve, reject) => {\n    const req = http.request({\n      host: '127.0.0.1', port, method, path: pathname,\n      headers: { ...(payload ? { 'content-length': payload.length } : {}), ...headers }\n    }, response => {\n      const chunks = [];\n      response.on('data', chunk => chunks.push(chunk));\n      response.on('end', () => resolve({\n        statusCode: response.statusCode,\n        headers: response.headers,\n        body: Buffer.concat(chunks).toString('utf8')\n      }));\n    });\n    req.once('error', reject);\n    if (payload) req.write(payload);\n    req.end();\n  });\n}\n\nfunction post(pathname, fields = {}) {\n  return request('POST', pathname, new URLSearchParams(fields).toString(), {\n    'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'\n  });\n}\n\nfunction attribute(tag, name) {\n  const match = tag.match(new RegExp(`\\\\b${name}\\\\s*=\\\\s*(?:([\"'])(.*?)\\\\1|([^\\\\s>]+))`, 'i'));\n  return match ? (match[2] === undefined ? match[3] : match[2]) : null;\n}\n\nfunction decodeText(html) {\n  return html\n    .replace(/<style\\b[\\s\\S]*?<\\/style\\s*>/gi, ' ')\n    .replace(/<script\\b[\\s\\S]*?<\\/script\\s*>/gi, ' ')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/&nbsp;/gi, ' ')\n    .replace(/&amp;/gi, '&')\n    .replace(/&lt;/gi, '<')\n    .replace(/&gt;/gi, '>')\n    .replace(/&quot;/gi, '\"')\n    .replace(/&#(?:39|x27);/gi, \"'\")\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction formFor(html, route) {\n  const all = [...html.matchAll(/<form\\b[^>]*>[\\s\\S]*?<\\/form\\s*>/gi)].map(match => match[0]);\n  const form = all.find(candidate => attribute(candidate.match(/^<form\\b[^>]*>/i)[0], 'action') === route);\n  assert.ok(form, `missing form for ${route}`);\n  const opening = form.match(/^<form\\b[^>]*>/i)[0];\n  assert.equal((attribute(opening, 'method') || 'get').toLowerCase(), 'post', `${route} must remain POST`);\n  return form;\n}\n\nfunction sharedStatusArea(html) {\n  const regions = [...html.matchAll(/<(header|nav)\\b[^>]*>[\\s\\S]*?<\\/\\1\\s*>/gi)].map(match => match[0]);\n  assert.ok(regions.length, 'layout must contain a shared header or navigation region');\n  const activity = regions.find(region => /recent|activity|last\\s+action|no\\s+activity/i.test(decodeText(region)));\n  assert.ok(activity, 'header/navigation does not contain the recent-activity indicator');\n  return activity;\n}\n\nfunction styleText(html) {\n  const styles = [...html.matchAll(/<style\\b[^>]*>([\\s\\S]*?)<\\/style\\s*>/gi)].map(match => match[1]);\n  assert.ok(styles.length, 'layout must embed a style element');\n  return styles.join('\\n');\n}\n\nfunction invocationsFrom(text) {\n  return text.split('\\n').filter(Boolean).map(line => JSON.parse(line));\n}\n\nasync function invocations() {\n  try {\n    return invocationsFrom(await fsp.readFile(invocationFile, 'utf8'));\n  } catch (error) {\n    if (error.code === 'ENOENT') return [];\n    throw error;\n  }\n}\n\nasync function auditEntries() {\n  const text = await fsp.readFile(auditFile, 'utf8');\n  return text.split('\\n').filter(Boolean).map(line => JSON.parse(line));\n}\n\nfunction assertInvocation(call, args) {\n  assert.deepEqual(call.args, args);\n  assert.equal(call.cwd, managerDir);\n  assert.equal(call.inheritedSentinel, 'inherited-verifier-value');\n}\n\nfunction assertAudit(entry, args, expected) {\n  assert.equal(new Date(entry.timestamp).toISOString(), entry.timestamp);\n  assert.deepEqual(entry.command, {\n    executable: 'node', arguments: ['release-manager.js', ...args], cwd: managerDir\n  });\n  assert.deepEqual(entry.result, expected);\n}\n\nfunction submitControl(form) {\n  const button = form.match(/<button\\b[^>]*>[\\s\\S]*?<\\/button\\s*>/i);\n  if (button) return button[0];\n  const input = [...form.matchAll(/<input\\b[^>]*>/gi)]\n    .map(match => match[0])\n    .find(tag => /^(?:submit|image)$/i.test(attribute(tag, 'type') || ''));\n  assert.ok(input, 'form lacks a submit control');\n  return input;\n}\n\nfunction visualSignature(action, form, css) {\n  const opening = form.match(/^<form\\b[^>]*>/i)[0];\n  const control = submitControl(form);\n  const controlOpening = control.match(/^<[^>]+>/)[0];\n  const visible = decodeText(control) || attribute(controlOpening, 'value') || '';\n  const iconRemainder = visible.replace(new RegExp(action, 'ig'), '').replace(/[\\s\\-_:]/g, '');\n  const inline = [attribute(opening, 'style'), attribute(controlOpening, 'style')].filter(Boolean).join(';');\n  const tokens = [\n    attribute(opening, 'class'), attribute(opening, 'id'),\n    attribute(controlOpening, 'class'), attribute(controlOpening, 'id')\n  ].filter(Boolean).join(' ');\n  const rules = [...css.matchAll(/([^{}]+)\\{([^{}]*)\\}/g)]\n    .filter(match => new RegExp(`(?:^|[-_.#\\\\s\"'=])${action}(?:$|[-_.#\\\\s\"'\\\\]])`, 'i').test(match[1]))\n    .map(match => match[2].replace(/\\s+/g, ' ').trim())\n    .filter(rule => /(?:color|background|border|content|box-shadow)/i.test(rule));\n  assert.ok(iconRemainder || inline || rules.length, `${action} has no observable individual icon/color treatment`);\n  return JSON.stringify({ iconRemainder, inline, tokens, rules });\n}\n\ntest.before(async () => {\n  assert.equal(fs.existsSync(serverFile), true, 'server.js must exist');\n  port = await allocatePort();\n  await fsp.writeFile(preloadFile, `\n'use strict';\nconst http = require('node:http');\nconst originalListen = http.Server.prototype.listen;\nhttp.Server.prototype.listen = function (...args) {\n  const callback = [...args].reverse().find(value => typeof value === 'function');\n  return originalListen.call(this, Number(process.env.REVIEW_UI_TEST_PORT), '127.0.0.1', callback);\n};\n`, 'utf8');\n\n  try {\n    await fsp.access(managerDir);\n  } catch (error) {\n    if (error.code !== 'ENOENT') throw error;\n    await fsp.mkdir(managerDir, { recursive: true });\n    managerCreated = true;\n  }\n  for (const file of [cliFile, configFile, invocationFile]) await moveAside(file);\n\n  await fsp.writeFile(cliFile, `\n'use strict';\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst args = process.argv.slice(2);\nfs.appendFileSync(path.join(__dirname, '.review-ui-contract-invocations.jsonl'), JSON.stringify({\n  args, cwd: process.cwd(), inheritedSentinel: process.env.REVIEW_UI_INHERITED_SENTINEL || null\n}) + '\\\\n');\nconst config = JSON.parse(fs.readFileSync(path.join(__dirname, '.review-ui-contract-config.json'), 'utf8'));\nconst result = config[args[0]] || { stdout: '', stderr: 'unknown command', exitCode: 64 };\nif (result.stdout) process.stdout.write(String(result.stdout));\nif (result.stderr) process.stderr.write(String(result.stderr));\nprocess.exit(Number(result.exitCode));\n`, 'utf8');\n  await writeConfig();\n\n  try {\n    originalAudit = await fsp.readFile(auditFile);\n    originalAuditExists = true;\n  } catch (error) {\n    if (error.code !== 'ENOENT') throw error;\n  }\n  await fsp.writeFile(auditFile, `${JSON.stringify(initialAuditEntry)}\\n`, 'utf8');\n  server = await startServer();\n});\n\ntest.after(async () => {\n  await stopServer(server);\n  await fsp.rm(auditFile, { force: true, recursive: true });\n  if (originalAuditExists) await fsp.writeFile(auditFile, originalAudit);\n  for (const file of [cliFile, configFile, invocationFile]) await fsp.rm(file, { force: true, recursive: true });\n  for (const item of backups.reverse()) await fsp.rename(item.backup, item.file);\n  if (managerCreated) await fsp.rm(managerDir, { force: true, recursive: true });\n  await fsp.rm(preloadFile, { force: true });\n});\n\ntest('shared layout embeds a coherent light/dark design without external CSS or scripts', async () => {\n  const home = await request('GET', '/');\n  assert.equal(home.statusCode, 200);\n  assert.match(home.headers['content-type'] || '', /text\\/html/i);\n  const css = styleText(home.body);\n  assert.match(css, /(?:--[\\w-]*(?:color|bg|surface)|\\b(?:color|background(?:-color)?)\\s*:)/i, 'CSS lacks a color palette');\n  assert.match(css, /\\b(?:padding|margin|gap)\\s*:/i, 'CSS lacks spacing rules');\n  assert.match(css, /\\bfont(?:-family|-size|-weight)?\\s*:/i, 'CSS lacks typography rules');\n  assert.match(css, /@media\\s*\\([^)]*prefers-color-scheme\\s*:\\s*dark[^)]*\\)/i, 'CSS lacks a dark color-scheme rule');\n  assert.doesNotMatch(home.body, /<link\\b[^>]*rel\\s*=\\s*[\"']?stylesheet/i);\n  assert.doesNotMatch(home.body, /<script\\b/i, 'client-side JavaScript is prohibited');\n\n  const audit = await request('GET', '/audit');\n  assert.equal(audit.statusCode, 200);\n  assert.ok(styleText(audit.body).length > 0, '/audit did not receive layout CSS');\n  assert.doesNotMatch(audit.body, /<link\\b[^>]*rel\\s*=\\s*[\"']?stylesheet|<script\\b/i);\n});\n\ntest('all seven action controls remain present and have distinct intent-aware treatments', async () => {\n  const response = await request('GET', '/');\n  const css = styleText(response.body);\n  const actions = ['configure', 'scan', 'prepare', 'recover', 'approve', 'reject', 'publish'];\n  const signatures = [];\n  for (const action of actions) {\n    const form = formFor(response.body, `/${action}`);\n    const control = submitControl(form);\n    assert.match(`${decodeText(control)} ${attribute(control.match(/^<[^>]+>/)[0], 'value') || ''}`, new RegExp(action, 'i'));\n    signatures.push(visualSignature(action, form, css));\n  }\n  assert.equal(new Set(signatures).size, actions.length, 'actions in the same risk category are not individually distinguishable');\n  assert.match(\n    `${css} ${response.body}`,\n    /safe|success|positive|primary|caution|warn|warning|danger|dangerous|destructive|critical|negative|risk/i,\n    'action styling does not communicate safe, cautionary, or destructive intent'\n  );\n\n  const configure = formFor(response.body, '/configure');\n  assert.equal([...configure.matchAll(/<input\\b[^>]*>/gi)].filter(match => attribute(match[0], 'name') === 'repo').length, 1);\n  const prepare = formFor(response.body, '/prepare');\n  const bump = [...prepare.matchAll(/<select\\b[^>]*>[\\s\\S]*?<\\/select>/gi)]\n    .find(match => attribute(match[0].match(/^<select\\b[^>]*>/i)[0], 'name') === 'bump');\n  assert.ok(bump, 'Prepare must retain its bump select');\n  assert.deepEqual([...bump[0].matchAll(/<option\\b[^>]*>/gi)].map(match => attribute(match[0], 'value')), ['patch', 'minor', 'major']);\n});\n\ntest('recorded activity is visible in the shared header on home and audit pages', async () => {\n  for (const route of ['/', '/audit']) {\n    const response = await request('GET', route);\n    const status = decodeText(sharedStatusArea(response.body));\n    assert.match(status, /publish/i, `${route} omitted the latest action name`);\n    assert.match(status, /(?:exit\\s*(?:code)?|code)[^0-9-]*0/i, `${route} omitted exit code 0`);\n    assert.ok(status.includes(initialAuditEntry.timestamp) || /2025[^\\n]*03:04:05/.test(status), `${route} omitted the activity timestamp`);\n  }\n});\n\ntest('all action routes preserve request shapes, exact CLI ordering, environment, HTTP outcomes, and audit results', async () => {\n  const cases = [\n    ['/configure', { repo: 'owner/repo + space; $(not-shell)' }, ['configure', '--repo', 'owner/repo + space; $(not-shell)']],\n    ['/scan', {}, ['scan']],\n    ['/prepare', { bump: 'minor' }, ['prepare', '--bump', 'minor']],\n    ['/recover', {}, ['recover']],\n    ['/approve', { approver: 'Ada Lovelace' }, ['approve', '--approver', 'Ada Lovelace']],\n    ['/reject', {}, ['reject']],\n    ['/publish', {}, ['publish']]\n  ];\n\n  for (const [index, [route, fields, args]] of cases.entries()) {\n    const action = args[0];\n    const expected = {\n      stdout: `route-${index}-${action}-stdout`,\n      stderr: `route-${index}-${action}-stderr`,\n      exitCode: index === 5 ? 27 : 0\n    };\n    await writeConfig({ [action]: expected });\n    const callsBefore = (await invocations()).length;\n    const auditBefore = (await auditEntries()).length;\n    const response = await post(route, fields);\n    assert.equal(response.statusCode, expected.exitCode === 0 ? 200 : 500);\n    assert.ok(decodeText(response.body).includes(expected.stdout));\n    assert.ok(decodeText(response.body).includes(expected.stderr));\n    assert.match(decodeText(response.body), new RegExp(`exit\\\\s*(?:code)?[^0-9-]*${expected.exitCode}`, 'i'));\n    const calls = await invocations();\n    assert.equal(calls.length, callsBefore + 1, `${route} invoked the CLI an unexpected number of times`);\n    assertInvocation(calls.at(-1), args);\n    const audits = await auditEntries();\n    assert.equal(audits.length, auditBefore + 1, `${route} did not append exactly one audit result`);\n    assertAudit(audits.at(-1), args, { ...expected, error: null });\n  }\n});\n\ntest('process page independently collapses large, labeled, escaped stdout and stderr streams', async () => {\n  const stdoutMarker = '<stdout-tag data-x=\"one\">& STDOUT ONLY \\'quoted\\'</stdout-tag>';\n  const stderrMarker = '<stderr-tag data-x=\"two\">& STDERR ONLY \\'quoted\\'</stderr-tag>';\n  const stdout = `${stdoutMarker}\\n${'O'.repeat(100000)}`;\n  const stderr = `${stderrMarker}\\n${'E'.repeat(100000)}`;\n  const expected = { stdout, stderr, exitCode: 23 };\n  await writeConfig({ scan: expected });\n  const callsBefore = (await invocations()).length;\n  const auditBefore = (await auditEntries()).length;\n  const response = await post('/scan');\n  assert.equal(response.statusCode, 500);\n  assert.doesNotMatch(response.body, /<stdout-tag\\b|<stderr-tag\\b/i, 'stream text was emitted as unsafe HTML');\n  assert.doesNotMatch(response.body, /<script\\b/i);\n\n  const details = [...response.body.matchAll(/<details\\b[^>]*>[\\s\\S]*?<\\/details\\s*>/gi)].map(match => match[0]);\n  const stdoutRegion = details.find(region => /stdout/i.test(decodeText(region)) && decodeText(region).includes(stdoutMarker));\n  const stderrRegion = details.find(region => /stderr/i.test(decodeText(region)) && decodeText(region).includes(stderrMarker));\n  assert.ok(stdoutRegion, 'large stdout is not in its own labeled native details control');\n  assert.ok(stderrRegion, 'large stderr is not in its own labeled native details control');\n  assert.notEqual(stdoutRegion, stderrRegion, 'stdout and stderr share one collapsible control');\n  assert.match(stdoutRegion, /<summary\\b[^>]*>[\\s\\S]*stdout[\\s\\S]*?<\\/summary>/i);\n  assert.match(stderrRegion, /<summary\\b[^>]*>[\\s\\S]*stderr[\\s\\S]*?<\\/summary>/i);\n  assert.ok(!decodeText(stdoutRegion).includes(stderrMarker), 'stderr was merged into stdout');\n  assert.ok(!decodeText(stderrRegion).includes(stdoutMarker), 'stdout was merged into stderr');\n\n  const calls = await invocations();\n  assert.equal(calls.length, callsBefore + 1, 'large-output request invoked the CLI an unexpected number of times');\n  assertInvocation(calls.at(-1), ['scan']);\n  const audits = await auditEntries();\n  assert.equal(audits.length, auditBefore + 1, 'large-output request did not append exactly one audit result');\n  const latest = audits.at(-1);\n  assertAudit(latest, ['scan'], { ...expected, error: null });\n\n  const statusText = decodeText(sharedStatusArea(response.body));\n  assert.match(statusText, /scan/i);\n  assert.match(statusText, /(?:exit\\s*(?:code)?|code)[^0-9-]*23/i);\n  assert.ok(statusText.includes(latest.timestamp) || statusText.includes(latest.timestamp.slice(0, 19)));\n\n  const auditPage = await request('GET', '/audit');\n  const auditStatus = decodeText(sharedStatusArea(auditPage.body));\n  assert.match(auditStatus, /scan/i);\n  assert.match(auditStatus, /(?:exit\\s*(?:code)?|code)[^0-9-]*23/i);\n  assert.ok(auditStatus.includes(latest.timestamp) || auditStatus.includes(latest.timestamp.slice(0, 19)));\n});\n\ntest('empty audit still renders an honest recent-activity status without fabricated values', async () => {\n  await stopServer(server);\n  server = null;\n  await fsp.writeFile(auditFile, '', 'utf8');\n  try {\n    server = await startServer();\n    for (const route of ['/', '/audit']) {\n      const response = await request('GET', route);\n      assert.equal(response.statusCode, 200);\n      const status = decodeText(sharedStatusArea(response.body));\n      assert.match(status, /no\\s+(?:recent\\s+)?activity|none|not\\s+available|nothing\\s+recorded|no\\s+actions?/i);\n      assert.doesNotMatch(status, /exit\\s*(?:code)?\\s*[:#=-]?\\s*-?\\d/i, 'empty state fabricated an exit code');\n      assert.doesNotMatch(status, /\\b20\\d{2}-\\d{2}-\\d{2}(?:T|\\s)/, 'empty state fabricated a timestamp');\n    }\n  } finally {\n    await stopServer(server);\n    server = null;\n    await fsp.writeFile(auditFile, `${JSON.stringify(initialAuditEntry)}\\n`, 'utf8');\n    server = await startServer();\n  }\n});\n\ntest('implementation remains zero-dependency and server-rendered', async () => {\n  const pkg = JSON.parse(await fsp.readFile(packageFile, 'utf8'));\n  for (const key of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {\n    assert.ok(!pkg[key] || Object.keys(pkg[key]).length === 0, `${key} must remain empty`);\n  }\n  const source = await fsp.readFile(serverFile, 'utf8');\n  assert.doesNotMatch(source, /<script\\b/i, 'server.js emits client-side script');\n  assert.doesNotMatch(source, /<link\\b[^>]*rel\\s*=\\s*[\"']?stylesheet/i, 'server.js emits an external stylesheet');\n  assert.doesNotMatch(source, /https?:\\/\\/[^\\s\"']+\\.css\\b/i, 'server.js references remote CSS');\n});\n"
+          }
+        ],
+        "notes": "Updated nonzero subprocess-result expectations to HTTP 500, retained assertions for rendered output and audit behavior, added explicit invocation/audit assertions to the large-stream case, and restored Reject's established no-argument request and CLI mapping."
+      },
+      "tokens": {
+        "input": 8570,
+        "output": 7179
+      },
+      "error": null
+    },
+    "test_gate": {
+      "status": "succeeded",
+      "attempts": 4,
+      "output": {
+        "passed": true,
+        "returncode": 0,
+        "stdout": "\n> release-manager-review-ui@0.0.0 test\n> node --test\n\n\u2714 shared layout embeds a coherent light/dark design without external CSS or scripts (167.3205ms)\n\u2714 all seven action controls remain present and have distinct intent-aware treatments (55.0781ms)\n\u2714 recorded activity is visible in the shared header on home and audit pages (54.7749ms)\n\u2714 all action routes preserve request shapes, exact CLI ordering, environment, HTTP outcomes, and audit results (417.2218ms)\n\u2714 process page independently collapses large, labeled, escaped stdout and stderr streams (80.6696ms)\n\u2714 empty audit still renders an honest recent-activity status without fabricated values (265.3878ms)\n\u2714 implementation remains zero-dependency and server-rendered (1.035ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 7\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 1139.7983\n",
+        "stderr": "",
+        "structured": {}
+      },
+      "tokens": null,
+      "error": null
+    },
+    "arbiter": {
+      "status": "succeeded",
+      "attempts": 1,
+      "output": {
+        "classification": "test_gap",
+        "explanation": "The failing assertions incorrectly require HTTP 200 for deliberately configured nonzero subprocess exit codes (Reject exit 27 and Scan exit 23). The implementation correctly preserves established result handling by treating nonzero CLI exits as failed process results and returning HTTP 500 while still rendering/auditing the result. This is consistent with C7/R12, which require preserving result handling. The test therefore rejects the intended scenario before checking the presentation behavior it claims to cover. Its Reject expectation of a --reason CLI argument also conflicts with the rendered Reject form and is not established by this presentation-only contract.",
+        "feedback_for_builder": null,
+        "feedback_for_planner": null,
+        "feedback_for_verifier": "Update the action and large-stream tests to expect HTTP 500 when their fixture configures a nonzero exitCode, then continue asserting rendered stdout/stderr, audit persistence, activity status, and CLI invocation. Do not require Reject to accept/forward a reason or invoke ['reject','--reason',... ] unless that behavior is established by the pre-existing implementation contract; this UI-change contract explicitly requires preserving existing request shapes and invocation mappings."
+      },
+      "tokens": {
+        "input": 18605,
+        "output": 570
+      },
+      "error": null
+    },
+    "review": {
+      "status": "succeeded",
+      "attempts": 3,
+      "output": {
+        "approved": true,
+        "issues": [],
+        "summary": "The previous review issue is resolved: ENOENT is treated as no recorded activity, while other audit read failures produce a distinct, non-misleading \u201cRecent activity unavailable\u201d indicator. The implementation remains scoped to server.js, preserves CLI, route, result, and audit behavior, and satisfies the presentation, dark-mode, action-affordance, activity, and collapsible stream requirements without external dependencies or client-side JavaScript."
+      },
+      "tokens": {
+        "input": 16884,
+        "output": 462
+      },
+      "error": null
+    },
+    "review_gate": {
+      "status": "succeeded",
+      "attempts": 3,
+      "output": {
+        "issues": [],
+        "summary": "The previous review issue is resolved: ENOENT is treated as no recorded activity, while other audit read failures produce a distinct, non-misleading \u201cRecent activity unavailable\u201d indicator. The implementation remains scoped to server.js, preserves CLI, route, result, and audit behavior, and satisfies the presentation, dark-mode, action-affordance, activity, and collapsible stream requirements without external dependencies or client-side JavaScript."
+      },
+      "tokens": null,
+      "error": null
+    },
+    "review_arbiter": {
+      "status": "succeeded",
+      "attempts": 2,
+      "output": {
+        "classification": "implementation_gap",
+        "explanation": "The status indicator falsely reports an empty audit history when activity data cannot be read due to permission or other I/O failures. That is misleading recent-activity visibility and violates the request's usability goal as well as the contract's non-misleading empty-state requirement. A genuine absence of an audit file may be shown as no activity, but operational read failures require a distinct unavailable/error state.",
+        "feedback_for_planner": null,
+        "feedback_for_verifier": null
+      },
+      "tokens": {
+        "input": 2728,
+        "output": 333
+      },
+      "error": null
+    },
+    "calibrate": {
+      "status": "succeeded",
+      "attempts": 1,
+      "output": {
+        "patterns": [
+          "When tests exercise deliberately failed subprocess outcomes, assert the established failure semantics (such as HTTP 500) while still checking rendered output and auditing; do not infer new request fields or CLI arguments that the existing contract never defined.",
+          "Distinguish a genuinely absent persistence file from an operational read failure: absence can produce an honest empty state, but permission, parsing, or other I/O failures require a separate unavailable/error state rather than silently reporting no data.",
+          "For shared activity indicators backed by append-only logs, read from the newest entries backward, skip malformed records, and display the most recent valid established result without fabricating values when none exists.",
+          "For server-rendered process output, keep stdout and stderr independently labeled, escaped, visually distinct, and independently collapsible with native HTML controls so presentation changes do not alter output semantics or require client-side JavaScript."
+        ]
+      },
+      "tokens": {
+        "input": 22453,
+        "output": 504
+      },
+      "error": null
+    }
+  },
+  "events": [
+    {
+      "seq": 0,
+      "type": "GRAPH_SNAPSHOT",
+      "node_id": null,
+      "timestamp": 1789991334.6049478,
+      "data": {
+        "entry_node": "plan",
+        "max_total_iterations": 140,
+        "nodes": {
+          "plan": {
+            "id": "plan",
+            "kind": "work",
+            "next": "plan_review",
+            "on_fail": null,
+            "routes": {},
+            "fatal_on_error": true
+          },
+          "plan_review": {
+            "id": "plan_review",
+            "kind": "human_gate",
+            "next": "build",
+            "on_fail": {
+              "target": "plan",
+              "reset": [
+                "plan"
+              ],
+              "budget_key": null,
+              "max_uses": null
+            },
+            "routes": {},
+            "fatal_on_error": true
+          },
+          "build": {
+            "id": "build",
+            "kind": "work",
+            "next": "test_gate",
+            "on_fail": null,
+            "routes": {},
+            "fatal_on_error": true
+          },
+          "verify": {
+            "id": "verify",
+            "kind": "work",
+            "next": "test_gate",
+            "on_fail": null,
+            "routes": {},
+            "fatal_on_error": true
+          },
+          "test_gate": {
+            "id": "test_gate",
+            "kind": "gate",
+            "next": "review",
+            "on_fail": {
+              "target": "arbiter",
+              "reset": [],
+              "budget_key": null,
+              "max_uses": null
+            },
+            "routes": {},
+            "fatal_on_error": true
+          },
+          "arbiter": {
+            "id": "arbiter",
+            "kind": "classifier",
+            "next": null,
+            "on_fail": null,
+            "routes": {
+              "bug": {
+                "target": "build",
+                "reset": [
+                  "build"
+                ],
+                "budget_key": "build_retry",
+                "max_uses": 4
+              },
+              "noise": {
+                "target": "test_gate",
+                "reset": [],
+                "budget_key": "build_retry",
+                "max_uses": 4
+              },
+              "spec_gap": {
+                "target": "plan",
+                "reset": [
+                  "plan",
+                  "build",
+                  "verify"
+                ],
+                "budget_key": "plan_retry",
+                "max_uses": 1
+              },
+              "ambiguity": {
+                "target": "plan",
+                "reset": [
+                  "plan",
+                  "build",
+                  "verify"
+                ],
+                "budget_key": "ambiguity_retry",
+                "max_uses": 1
+              },
+              "test_gap": {
+                "target": "verify",
+                "reset": [
+                  "verify"
+                ],
+                "budget_key": "test_retry",
+                "max_uses": 1
+              }
+            },
+            "fatal_on_error": true
+          },
+          "review": {
+            "id": "review",
+            "kind": "work",
+            "next": "review_gate",
+            "on_fail": null,
+            "routes": {},
+            "fatal_on_error": true
+          },
+          "review_gate": {
+            "id": "review_gate",
+            "kind": "gate",
+            "next": "calibrate",
+            "on_fail": {
+              "target": "review_arbiter",
+              "reset": [],
+              "budget_key": null,
+              "max_uses": null
+            },
+            "routes": {},
+            "fatal_on_error": true
+          },
+          "review_arbiter": {
+            "id": "review_arbiter",
+            "kind": "classifier",
+            "next": null,
+            "on_fail": null,
+            "routes": {
+              "implementation_gap": {
+                "target": "build",
+                "reset": [
+                  "build",
+                  "review"
+                ],
+                "budget_key": "review_retry",
+                "max_uses": 6
+              },
+              "scope_creep": {
+                "target": "plan",
+                "reset": [
+                  "plan",
+                  "build",
+                  "verify",
+                  "review"
+                ],
+                "budget_key": "scope_retry",
+                "max_uses": 2
+              },
+              "test_gap": {
+                "target": "verify",
+                "reset": [
+                  "verify",
+                  "review"
+                ],
+                "budget_key": "test_retry",
+                "max_uses": 1
+              }
+            },
+            "fatal_on_error": true
+          },
+          "calibrate": {
+            "id": "calibrate",
+            "kind": "work",
+            "next": null,
+            "on_fail": null,
+            "routes": {},
+            "fatal_on_error": false
+          }
+        }
+      }
+    },
+    {
+      "seq": 1,
+      "type": "NODE_STARTED",
+      "node_id": "plan",
+      "timestamp": 1789991334.6230466,
+      "data": {}
+    },
+    {
+      "seq": 2,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "plan",
+      "timestamp": 1789991372.6949213,
+      "data": {
+        "tokens": {
+          "input": 1427,
+          "output": 2510
+        }
+      }
+    },
+    {
+      "seq": 3,
+      "type": "NODE_STARTED",
+      "node_id": "plan_review",
+      "timestamp": 1789991372.6977637,
+      "data": {}
+    },
+    {
+      "seq": 4,
+      "type": "AWAITING_HUMAN_REVIEW",
+      "node_id": "plan_review",
+      "timestamp": 1789991372.700237,
+      "data": {}
+    },
+    {
+      "seq": 5,
+      "type": "HUMAN_REVIEW_SUBMITTED",
+      "node_id": "plan_review",
+      "timestamp": 1789991391.912536,
+      "data": {
+        "approved": true,
+        "reviewed_by": null
+      }
+    },
+    {
+      "seq": 6,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "plan_review",
+      "timestamp": 1789991391.9231226,
+      "data": {
+        "tokens": null
+      }
+    },
+    {
+      "seq": 7,
+      "type": "NODE_STARTED",
+      "node_id": "build",
+      "timestamp": 1789991391.9486516,
+      "data": {}
+    },
+    {
+      "seq": 8,
+      "type": "NODE_STARTED",
+      "node_id": "verify",
+      "timestamp": 1789991391.951793,
+      "data": {}
+    },
+    {
+      "seq": 9,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "build",
+      "timestamp": 1789991464.8515334,
+      "data": {
+        "tokens": {
+          "input": 9942,
+          "output": 9283
+        },
+        "files_written": [
+          "server.js"
+        ]
+      }
+    },
+    {
+      "seq": 10,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "verify",
+      "timestamp": 1789991472.842144,
+      "data": {
+        "tokens": {
+          "input": 8173,
+          "output": 8022
+        },
+        "files_written": [
+          "test/server.test.js"
+        ]
+      }
+    },
+    {
+      "seq": 11,
+      "type": "NODE_STARTED",
+      "node_id": "test_gate",
+      "timestamp": 1789991472.846362,
+      "data": {}
+    },
+    {
+      "seq": 12,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "test_gate",
+      "timestamp": 1789991477.959029,
+      "data": {
+        "tokens": null
+      }
+    },
+    {
+      "seq": 13,
+      "type": "ROUTE_TAKEN",
+      "node_id": null,
+      "timestamp": 1789991477.9618688,
+      "data": {
+        "target": "arbiter",
+        "reset": [],
+        "budget_key": null,
+        "budget_used": null,
+        "budget_max": null
+      }
+    },
+    {
+      "seq": 14,
+      "type": "NODE_STARTED",
+      "node_id": "arbiter",
+      "timestamp": 1789991477.9660335,
+      "data": {}
+    },
+    {
+      "seq": 15,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "arbiter",
+      "timestamp": 1789991488.535146,
+      "data": {
+        "tokens": {
+          "input": 18605,
+          "output": 570
+        }
+      }
+    },
+    {
+      "seq": 16,
+      "type": "ROUTE_TAKEN",
+      "node_id": null,
+      "timestamp": 1789991488.539834,
+      "data": {
+        "target": "verify",
+        "reset": [
+          "verify"
+        ],
+        "budget_key": "test_retry",
+        "budget_used": 1,
+        "budget_max": 1
+      }
+    },
+    {
+      "seq": 17,
+      "type": "NODE_STARTED",
+      "node_id": "verify",
+      "timestamp": 1789991488.5437026,
+      "data": {}
+    },
+    {
+      "seq": 18,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "verify",
+      "timestamp": 1789991539.144748,
+      "data": {
+        "tokens": {
+          "input": 8570,
+          "output": 7179
+        },
+        "files_written": [
+          "test/server.test.js"
+        ]
+      }
+    },
+    {
+      "seq": 19,
+      "type": "NODE_STARTED",
+      "node_id": "test_gate",
+      "timestamp": 1789991539.1505888,
+      "data": {}
+    },
+    {
+      "seq": 20,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "test_gate",
+      "timestamp": 1789991540.7884228,
+      "data": {
+        "tokens": null
+      }
+    },
+    {
+      "seq": 21,
+      "type": "NODE_STARTED",
+      "node_id": "review",
+      "timestamp": 1789991540.7928479,
+      "data": {}
+    },
+    {
+      "seq": 22,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "review",
+      "timestamp": 1789991546.1284223,
+      "data": {
+        "tokens": {
+          "input": 17215,
+          "output": 171
+        }
+      }
+    },
+    {
+      "seq": 23,
+      "type": "NODE_STARTED",
+      "node_id": "review_gate",
+      "timestamp": 1789991546.1333961,
+      "data": {}
+    },
+    {
+      "seq": 24,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "review_gate",
+      "timestamp": 1789991546.1372578,
+      "data": {
+        "tokens": null
+      }
+    },
+    {
+      "seq": 25,
+      "type": "ROUTE_TAKEN",
+      "node_id": null,
+      "timestamp": 1789991546.1422074,
+      "data": {
+        "target": "review_arbiter",
+        "reset": [],
+        "budget_key": null,
+        "budget_used": null,
+        "budget_max": null
+      }
+    },
+    {
+      "seq": 26,
+      "type": "NODE_STARTED",
+      "node_id": "review_arbiter",
+      "timestamp": 1789991546.1469193,
+      "data": {}
+    },
+    {
+      "seq": 27,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "review_arbiter",
+      "timestamp": 1789991549.1173058,
+      "data": {
+        "tokens": {
+          "input": 2758,
+          "output": 131
+        }
+      }
+    },
+    {
+      "seq": 28,
+      "type": "ROUTE_TAKEN",
+      "node_id": null,
+      "timestamp": 1789991549.1234531,
+      "data": {
+        "target": "build",
+        "reset": [
+          "build",
+          "review"
+        ],
+        "budget_key": "review_retry",
+        "budget_used": 1,
+        "budget_max": 6
+      }
+    },
+    {
+      "seq": 29,
+      "type": "NODE_STARTED",
+      "node_id": "build",
+      "timestamp": 1789991549.1290896,
+      "data": {}
+    },
+    {
+      "seq": 30,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "build",
+      "timestamp": 1789991601.6541631,
+      "data": {
+        "tokens": {
+          "input": 13097,
+          "output": 7985
+        },
+        "files_written": [
+          "server.js"
+        ]
+      }
+    },
+    {
+      "seq": 31,
+      "type": "NODE_STARTED",
+      "node_id": "test_gate",
+      "timestamp": 1789991601.65902,
+      "data": {}
+    },
+    {
+      "seq": 32,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "test_gate",
+      "timestamp": 1789991603.2256596,
+      "data": {
+        "tokens": null
+      }
+    },
+    {
+      "seq": 33,
+      "type": "NODE_STARTED",
+      "node_id": "review",
+      "timestamp": 1789991603.2295997,
+      "data": {}
+    },
+    {
+      "seq": 34,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "review",
+      "timestamp": 1789991622.6348903,
+      "data": {
+        "tokens": {
+          "input": 16831,
+          "output": 1190
+        }
+      }
+    },
+    {
+      "seq": 35,
+      "type": "NODE_STARTED",
+      "node_id": "review_gate",
+      "timestamp": 1789991622.6405013,
+      "data": {}
+    },
+    {
+      "seq": 36,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "review_gate",
+      "timestamp": 1789991622.6451504,
+      "data": {
+        "tokens": null
+      }
+    },
+    {
+      "seq": 37,
+      "type": "ROUTE_TAKEN",
+      "node_id": null,
+      "timestamp": 1789991622.649209,
+      "data": {
+        "target": "review_arbiter",
+        "reset": [],
+        "budget_key": null,
+        "budget_used": null,
+        "budget_max": null
+      }
+    },
+    {
+      "seq": 38,
+      "type": "NODE_STARTED",
+      "node_id": "review_arbiter",
+      "timestamp": 1789991622.6536522,
+      "data": {}
+    },
+    {
+      "seq": 39,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "review_arbiter",
+      "timestamp": 1789991629.5997007,
+      "data": {
+        "tokens": {
+          "input": 2728,
+          "output": 333
+        }
+      }
+    },
+    {
+      "seq": 40,
+      "type": "ROUTE_TAKEN",
+      "node_id": null,
+      "timestamp": 1789991629.6061628,
+      "data": {
+        "target": "build",
+        "reset": [
+          "build",
+          "review"
+        ],
+        "budget_key": "review_retry",
+        "budget_used": 2,
+        "budget_max": 6
+      }
+    },
+    {
+      "seq": 41,
+      "type": "NODE_STARTED",
+      "node_id": "build",
+      "timestamp": 1789991629.6107821,
+      "data": {}
+    },
+    {
+      "seq": 42,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "build",
+      "timestamp": 1789991684.2956817,
+      "data": {
+        "tokens": {
+          "input": 12474,
+          "output": 8057
+        },
+        "files_written": [
+          "server.js"
+        ]
+      }
+    },
+    {
+      "seq": 43,
+      "type": "NODE_STARTED",
+      "node_id": "test_gate",
+      "timestamp": 1789991684.3018162,
+      "data": {}
+    },
+    {
+      "seq": 44,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "test_gate",
+      "timestamp": 1789991685.9180532,
+      "data": {
+        "tokens": null
+      }
+    },
+    {
+      "seq": 45,
+      "type": "NODE_STARTED",
+      "node_id": "review",
+      "timestamp": 1789991685.9230027,
+      "data": {}
+    },
+    {
+      "seq": 46,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "review",
+      "timestamp": 1789991696.0716622,
+      "data": {
+        "tokens": {
+          "input": 16884,
+          "output": 462
+        }
+      }
+    },
+    {
+      "seq": 47,
+      "type": "NODE_STARTED",
+      "node_id": "review_gate",
+      "timestamp": 1789991696.0766497,
+      "data": {}
+    },
+    {
+      "seq": 48,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "review_gate",
+      "timestamp": 1789991696.0815437,
+      "data": {
+        "tokens": null
+      }
+    },
+    {
+      "seq": 49,
+      "type": "NODE_STARTED",
+      "node_id": "calibrate",
+      "timestamp": 1789991696.085814,
+      "data": {}
+    },
+    {
+      "seq": 50,
+      "type": "NODE_SUCCEEDED",
+      "node_id": "calibrate",
+      "timestamp": 1789991706.7303677,
+      "data": {
+        "tokens": {
+          "input": 22453,
+          "output": 504
+        }
+      }
+    },
+    {
+      "seq": 51,
+      "type": "RUN_FINISHED",
+      "node_id": null,
+      "timestamp": 1789991706.73466,
+      "data": {
+        "status": "completed"
+      }
+    }
+  ],
+  "pending_reviews": {},
+  "ended_at": 1789991706.734652
+}
