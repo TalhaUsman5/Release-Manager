@@ -17,9 +17,24 @@ Two projects, one workflow:
   state).
 
 Both were built through [Shipyard](https://github.com/TalhaUsman5/Shipyard)
-— a phase-graph LLM orchestration harness — not written by hand. See that
-repo's `ROADMAP.md` for the build history and the sessions that produced
-these two projects.
+— a phase-graph LLM orchestration harness — not written by hand. See
+[`shipyard_dossier.html`](https://github.com/TalhaUsman5/Shipyard/blob/main/shipyard_dossier.html)
+for the build history, architecture, and sessions that produced these
+two projects, and `evidence/` in this repo for a raw session/execution
+trace from one of them — also served live by the deployed console
+itself at `/evidence/trace` (see "Hosting" below).
+
+**Why the evidence files exist in two places:** `evidence/` at this
+repo's root is what the running app actually reads at
+`path.resolve(__dirname, '../evidence')` (a true sibling of
+`release-manager-review-ui/`). A second, identical copy lives inside
+`release-manager-review-ui/evidence/` purely as a test fixture — the
+Shipyard build process that wrote this feature could only write files
+inside its own project directory, not to a real sibling path, so the
+test suite copies that fixture out to the real sibling location at
+setup time (and deliberately poisons the in-project copy during the
+test, to prove the server never reads evidence from the wrong
+location). Not a duplication mistake — both copies are load-bearing.
 
 ## Setup
 

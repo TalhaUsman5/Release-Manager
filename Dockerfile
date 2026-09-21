@@ -4,6 +4,7 @@ WORKDIR /app
 
 COPY release-manager-v2/ ./release-manager-v2/
 COPY release-manager-review-ui/ ./release-manager-review-ui/
+COPY evidence/ ./evidence/
 
 WORKDIR /app/release-manager-review-ui
 

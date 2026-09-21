@@ -10,29 +10,107 @@ const { spawn } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const serverFile = path.join(root, 'server.js');
-const runtimePreload = path.join(root, `.review-runtime-preload-${process.pid}.js`);
-const capturePreload = path.join(root, `.review-listen-capture-preload-${process.pid}.js`);
+const projectEvidenceDir = path.join(root, 'evidence');
+const contractEvidenceDir = path.resolve(root, '../evidence');
+const runtimePreload = path.join(root, `.evidence-runtime-${process.pid}.js`);
+const capturePreload = path.join(root, `.evidence-capture-${process.pid}.js`);
 
 const PUBLIC_ORIGIN = 'https://release-manager.example.com';
-const USERNAME = 'listen-test-user';
-const PASSWORD = 'listen-test-password';
+const USERNAME = 'evidence-test-user';
+const PASSWORD = 'evidence-test-password';
+
+const evidenceCases = [
+  {
+    route: '/evidence/trace',
+    filename: '3db140f839a8-trace.html',
+    contentType: 'text/html'
+  },
+  {
+    route: '/evidence/session',
+    filename: '3db140f839a8.json',
+    contentType: 'application/json'
+  },
+  {
+    route: '/evidence/events',
+    filename: '3db140f839a8.events.jsonl',
+    contentType: 'application/x-ndjson'
+  }
+];
 
 let runtimePort;
 let runtimeServer;
+let madeContractDirectory = false;
+const contractBackups = [];
+const projectBackups = [];
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function allocatePort() {
+async function unusedPort() {
   return new Promise((resolve, reject) => {
-    const listener = net.createServer();
-    listener.once('error', reject);
-    listener.listen(0, '127.0.0.1', () => {
-      const selected = listener.address().port;
-      listener.close(error => error ? reject(error) : resolve(selected));
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      server.close(error => error ? reject(error) : resolve(port));
     });
   });
+}
+
+async function readIfPresent(filename) {
+  try {
+    return { exists: true, data: await fs.readFile(filename) };
+  } catch (error) {
+    if (error.code === 'ENOENT') return { exists: false, data: null };
+    throw error;
+  }
+}
+
+async function installEvidenceFixtures() {
+  try {
+    const stat = await fs.stat(contractEvidenceDir);
+    assert.ok(stat.isDirectory(), `${contractEvidenceDir} is not a directory`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    await fs.mkdir(contractEvidenceDir, { recursive: true });
+    madeContractDirectory = true;
+  }
+
+  for (const entry of evidenceCases) {
+    const projectFile = path.join(projectEvidenceDir, entry.filename);
+    const contractFile = path.join(contractEvidenceDir, entry.filename);
+    const supplied = await fs.readFile(projectFile);
+
+    contractBackups.push({ filename: contractFile, ...(await readIfPresent(contractFile)) });
+    projectBackups.push({ filename: projectFile, data: supplied });
+
+    await fs.writeFile(contractFile, supplied);
+    await fs.writeFile(
+      projectFile,
+      `WRONG_PROJECT_LOCAL_EVIDENCE_DIRECTORY:${entry.filename}:${process.pid}`,
+      'utf8'
+    );
+  }
+}
+
+async function restoreEvidenceFixtures() {
+  for (const backup of projectBackups.reverse()) {
+    await fs.writeFile(backup.filename, backup.data);
+  }
+
+  for (const backup of contractBackups.reverse()) {
+    if (backup.exists) await fs.writeFile(backup.filename, backup.data);
+    else await fs.rm(backup.filename, { force: true });
+  }
+
+  if (madeContractDirectory) {
+    try {
+      await fs.rmdir(contractEvidenceDir);
+    } catch (error) {
+      if (error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT') throw error;
+    }
+  }
 }
 
 function cleanEnvironment() {
@@ -45,47 +123,42 @@ function cleanEnvironment() {
     'LISTEN_HOST',
     'PORT',
     'HOST',
-    'REVIEW_UI_TEST_PORT',
-    'REVIEW_UI_CAPTURE_FILE'
-  ]) {
-    delete env[name];
-  }
-  delete env.NODE_OPTIONS;
+    'EVIDENCE_TEST_PORT',
+    'EVIDENCE_CAPTURE_FILE',
+    'NODE_OPTIONS'
+  ]) delete env[name];
   return env;
 }
 
-function requiredEnvironment(overrides = {}) {
+function serverEnvironment(overrides = {}) {
   return Object.assign(cleanEnvironment(), {
-    GITHUB_TOKEN: 'github-token-for-listen-tests',
+    GITHUB_TOKEN: 'github-token-for-evidence-tests',
     REVIEW_UI_USERNAME: USERNAME,
     REVIEW_UI_PASSWORD: PASSWORD,
     PUBLIC_ORIGIN
   }, overrides);
 }
 
-function spawnServer(env) {
+function startServer(env) {
   const child = spawn(process.execPath, ['server.js'], {
     cwd: root,
     env,
     stdio: ['ignore', 'pipe', 'pipe']
   });
-
   let output = '';
   child.stdout.on('data', chunk => { output += chunk.toString(); });
   child.stderr.on('data', chunk => { output += chunk.toString(); });
   return { child, output: () => output };
 }
 
-async function waitForExit(serverProcess, timeout = 5000) {
-  if (serverProcess.child.exitCode !== null) return serverProcess.child.exitCode;
-
+async function waitForExit(processInfo, timeout = 5000) {
+  if (processInfo.child.exitCode !== null) return processInfo.child.exitCode;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      serverProcess.child.kill('SIGKILL');
-      reject(new Error(`server did not exit in time: ${serverProcess.output()}`));
+      processInfo.child.kill('SIGKILL');
+      reject(new Error(`server did not exit: ${processInfo.output()}`));
     }, timeout);
-
-    serverProcess.child.once('exit', code => {
+    processInfo.child.once('exit', code => {
       clearTimeout(timer);
       resolve(code);
     });
@@ -95,97 +168,67 @@ async function waitForExit(serverProcess, timeout = 5000) {
 async function canConnect(port) {
   return new Promise(resolve => {
     const socket = net.createConnection({ host: '127.0.0.1', port });
-    let settled = false;
-    const finish = value => {
-      if (settled) return;
-      settled = true;
+    let done = false;
+    const finish = result => {
+      if (done) return;
+      done = true;
       socket.destroy();
-      resolve(value);
+      resolve(result);
     };
-
     socket.setTimeout(100, () => finish(false));
     socket.once('connect', () => finish(true));
     socket.once('error', () => finish(false));
   });
 }
 
-async function waitForListening(serverProcess, port) {
+async function waitForListening(processInfo, port) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
-    if (serverProcess.child.exitCode !== null) {
-      throw new Error(`server exited before listening: ${serverProcess.output()}`);
+    if (processInfo.child.exitCode !== null) {
+      throw new Error(`server exited before listening: ${processInfo.output()}`);
     }
     if (await canConnect(port)) return;
     await delay(25);
   }
-  throw new Error(`server did not listen on test port: ${serverProcess.output()}`);
+  throw new Error(`server did not listen: ${processInfo.output()}`);
 }
 
-async function stopServer(serverProcess) {
-  if (!serverProcess || serverProcess.child.exitCode !== null) return;
-
-  const exited = new Promise(resolve => serverProcess.child.once('exit', resolve));
-  serverProcess.child.kill('SIGTERM');
-  const timer = setTimeout(() => serverProcess.child.kill('SIGKILL'), 1000);
+async function stopServer(processInfo) {
+  if (!processInfo || processInfo.child.exitCode !== null) return;
+  const exited = new Promise(resolve => processInfo.child.once('exit', resolve));
+  processInfo.child.kill('SIGTERM');
+  const killTimer = setTimeout(() => processInfo.child.kill('SIGKILL'), 1000);
   await exited;
-  clearTimeout(timer);
+  clearTimeout(killTimer);
 }
 
-async function captureListen(overrides = {}) {
-  const captureFile = path.join(
-    root,
-    `.review-listen-capture-${process.pid}-${Math.random().toString(16).slice(2)}.json`
-  );
-  const env = requiredEnvironment(overrides);
-  env.NODE_OPTIONS = `--require=${capturePreload}`;
-  env.REVIEW_UI_CAPTURE_FILE = captureFile;
-
-  const serverProcess = spawnServer(env);
-  const exitCode = await waitForExit(serverProcess);
-
-  let capture = null;
-  try {
-    capture = JSON.parse(await fs.readFile(captureFile, 'utf8'));
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  } finally {
-    await fs.rm(captureFile, { force: true });
-  }
-
-  return { exitCode, capture, output: serverProcess.output() };
-}
-
-function assertEndpoint(result, expectedHost, expectedPort) {
-  assert.equal(result.exitCode, 0, `startup failed: ${result.output}`);
-  assert.ok(result.capture, `HTTP listen was never called: ${result.output}`);
-  assert.equal(result.capture.host, expectedHost, 'unexpected HTTP listen host');
-  assert.equal(Number(result.capture.port), expectedPort, 'unexpected HTTP listen port');
-}
-
-function authorization() {
-  return `Basic ${Buffer.from(`${USERNAME}:${PASSWORD}`, 'utf8').toString('base64')}`;
+function authHeader(username = USERNAME, password = PASSWORD) {
+  return `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`;
 }
 
 async function request({
-  requestPath = '/definitely-not-an-existing-route',
-  host = 'release-manager.example.com',
+  requestPath = '/',
+  method = 'GET',
+  authenticated = true,
   origin = PUBLIC_ORIGIN,
+  host = 'release-manager.example.com',
   secure = true,
-  authenticated = true
+  headers: extraHeaders = {}
 } = {}) {
   return new Promise((resolve, reject) => {
     const headers = {
       host,
       origin,
-      'sec-fetch-site': 'same-origin'
+      'sec-fetch-site': 'same-origin',
+      ...extraHeaders
     };
-    if (authenticated) headers.authorization = authorization();
-    if (secure) headers['x-review-test-secure'] = 'yes';
+    if (authenticated) headers.authorization = authHeader();
+    if (secure) headers['x-evidence-test-secure'] = 'yes';
 
     const req = http.request({
       host: '127.0.0.1',
       port: runtimePort,
-      method: 'GET',
+      method,
       path: requestPath,
       headers,
       agent: false
@@ -198,21 +241,74 @@ async function request({
         body: Buffer.concat(chunks).toString('utf8')
       }));
     });
-
     req.once('error', reject);
     req.end();
   });
 }
 
+function assertAuthRejected(response, description) {
+  assert.equal(response.statusCode, 401, `${description}: ${response.body}`);
+  assert.match(
+    String(response.headers['www-authenticate'] || ''),
+    /^Basic\b/i,
+    `${description}: missing the existing Basic Auth challenge`
+  );
+}
+
+async function captureListen(overrides = {}) {
+  const captureFile = path.join(
+    root,
+    `.evidence-listen-${process.pid}-${Math.random().toString(16).slice(2)}.json`
+  );
+  const env = serverEnvironment(overrides);
+  env.NODE_OPTIONS = `--require=${capturePreload}`;
+  env.EVIDENCE_CAPTURE_FILE = captureFile;
+  const processInfo = startServer(env);
+  const exitCode = await waitForExit(processInfo);
+  let capture;
+  try {
+    capture = JSON.parse(await fs.readFile(captureFile, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    capture = null;
+  } finally {
+    await fs.rm(captureFile, { force: true });
+  }
+  return { exitCode, capture, output: processInfo.output() };
+}
+
 test.before(async () => {
   await fs.access(serverFile);
-  runtimePort = await allocatePort();
+  await installEvidenceFixtures();
+
+  await fs.writeFile(runtimePreload, `
+'use strict';
+const http = require('node:http');
+const originalCreateServer = http.createServer;
+const originalListen = http.Server.prototype.listen;
+http.createServer = function (...args) {
+  const index = args.findIndex(value => typeof value === 'function');
+  if (index !== -1) {
+    const listener = args[index];
+    args[index] = function (req, res) {
+      if (req.headers['x-evidence-test-secure'] === 'yes') {
+        Object.defineProperty(req.socket, 'encrypted', { configurable: true, value: true });
+      }
+      return listener.call(this, req, res);
+    };
+  }
+  return Reflect.apply(originalCreateServer, this, args);
+};
+http.Server.prototype.listen = function (...args) {
+  const callback = [...args].reverse().find(value => typeof value === 'function');
+  return originalListen.call(this, Number(process.env.EVIDENCE_TEST_PORT), '127.0.0.1', callback);
+};
+`, 'utf8');
 
   await fs.writeFile(capturePreload, `
 'use strict';
 const fs = require('node:fs');
 const http = require('node:http');
-
 http.Server.prototype.listen = function (...args) {
   let port;
   let host;
@@ -223,196 +319,239 @@ http.Server.prototype.listen = function (...args) {
     port = args[0];
     host = typeof args[1] === 'string' ? args[1] : undefined;
   }
-
-  fs.writeFileSync(
-    process.env.REVIEW_UI_CAPTURE_FILE,
-    JSON.stringify({ port: port === undefined ? null : port, host: host === undefined ? null : host })
-  );
+  fs.writeFileSync(process.env.EVIDENCE_CAPTURE_FILE, JSON.stringify({ port, host }));
   setImmediate(() => process.exit(0));
   return this;
 };
 `, 'utf8');
 
-  await fs.writeFile(runtimePreload, `
-'use strict';
-const http = require('node:http');
-const originalCreateServer = http.createServer;
-const originalListen = http.Server.prototype.listen;
-
-http.createServer = function (...args) {
-  const listenerIndex = args.findIndex(value => typeof value === 'function');
-  if (listenerIndex !== -1) {
-    const listener = args[listenerIndex];
-    args[listenerIndex] = function (request, response) {
-      if (request.headers['x-review-test-secure'] === 'yes') {
-        Object.defineProperty(request.socket, 'encrypted', {
-          configurable: true,
-          value: true
-        });
-      }
-      return listener.call(this, request, response);
-    };
-  }
-  return Reflect.apply(originalCreateServer, this, args);
-};
-
-http.Server.prototype.listen = function (...args) {
-  const callback = [...args].reverse().find(value => typeof value === 'function');
-  return originalListen.call(
-    this,
-    Number(process.env.REVIEW_UI_TEST_PORT),
-    '127.0.0.1',
-    callback
-  );
-};
-`, 'utf8');
-
-  const env = requiredEnvironment({
+  runtimePort = await unusedPort();
+  const env = serverEnvironment({
     LISTEN_HOST: '0.0.0.0',
     PORT: '45678',
-    REVIEW_UI_TEST_PORT: String(runtimePort)
+    EVIDENCE_TEST_PORT: String(runtimePort)
   });
   env.NODE_OPTIONS = `--require=${runtimePreload}`;
-  runtimeServer = spawnServer(env);
+  runtimeServer = startServer(env);
   await waitForListening(runtimeServer, runtimePort);
 });
 
 test.after(async () => {
-  await stopServer(runtimeServer);
-  await fs.rm(runtimePreload, { force: true });
-  await fs.rm(capturePreload, { force: true });
+  try {
+    await stopServer(runtimeServer);
+  } finally {
+    await fs.rm(runtimePreload, { force: true });
+    await fs.rm(capturePreload, { force: true });
+    await restoreEvidenceFixtures();
+  }
 });
 
-test('unset LISTEN_HOST and PORT use the exact local-development defaults', async () => {
-  const result = await captureListen();
-  assertEndpoint(result, '127.0.0.1', 3000);
+test('source declares the required sibling evidence directory and all fixed mappings', async () => {
+  const source = await fs.readFile(serverFile, 'utf8');
+  assert.match(
+    source,
+    /path\.resolve\(\s*__dirname\s*,\s*['"]\.\.\/evidence['"]\s*\)/,
+    "missing path.resolve(__dirname, '../evidence')"
+  );
+
+  for (const entry of evidenceCases) {
+    assert.match(source, new RegExp(entry.route.replaceAll('/', '\\/')), `missing ${entry.route}`);
+    assert.match(
+      source,
+      new RegExp(entry.filename.replaceAll('.', '\\.')),
+      `missing fixed filename ${entry.filename}`
+    );
+  }
 });
 
-test('LISTEN_HOST alone replaces only the default listen address', async () => {
-  const result = await captureListen({ LISTEN_HOST: '0.0.0.0' });
-  assertEndpoint(result, '0.0.0.0', 3000);
-});
+test('the three exact GET routes are public and serve only their fixed sibling-directory files', async t => {
+  for (const entry of evidenceCases) {
+    await t.test(entry.route, async () => {
+      const expected = await fs.readFile(path.join(contractEvidenceDir, entry.filename), 'utf8');
+      const response = await request({ requestPath: entry.route, authenticated: false });
 
-test('PORT alone replaces only the default listen port', async () => {
-  const selectedPort = await allocatePort();
-  const result = await captureListen({ PORT: String(selectedPort) });
-  assertEndpoint(result, '127.0.0.1', selectedPort);
-});
-
-test('LISTEN_HOST and PORT are both passed to HTTP listen when configured together', async () => {
-  const selectedPort = await allocatePort();
-  const result = await captureListen({
-    LISTEN_HOST: '127.0.0.2',
-    PORT: String(selectedPort)
-  });
-  assertEndpoint(result, '127.0.0.2', selectedPort);
-});
-
-test('legacy HOST does not replace the LISTEN_HOST interface', async () => {
-  const result = await captureListen({ HOST: '0.0.0.0' });
-  assertEndpoint(result, '127.0.0.1', 3000);
-});
-
-test('LISTEN_HOST and PORT remain optional startup variables', async () => {
-  const result = await captureListen();
-  assert.equal(result.exitCode, 0, result.output);
-  assert.ok(result.capture, 'startup treated an optional listen variable as missing');
-});
-
-test('each established required environment variable still fails fast when missing', async t => {
-  const requiredNames = [
-    'GITHUB_TOKEN',
-    'REVIEW_UI_USERNAME',
-    'REVIEW_UI_PASSWORD',
-    'PUBLIC_ORIGIN'
-  ];
-
-  for (const missingName of requiredNames) {
-    await t.test(missingName, async () => {
-      const captureFile = path.join(
-        root,
-        `.review-required-capture-${process.pid}-${Math.random().toString(16).slice(2)}.json`
-      );
-      const env = requiredEnvironment();
-      delete env[missingName];
-      env.NODE_OPTIONS = `--require=${capturePreload}`;
-      env.REVIEW_UI_CAPTURE_FILE = captureFile;
-
-      const serverProcess = spawnServer(env);
-      const exitCode = await waitForExit(serverProcess);
-      const output = serverProcess.output();
-
-      assert.notEqual(exitCode, 0, `${missingName} was no longer required`);
-      assert.match(output, new RegExp(missingName), `failure did not identify ${missingName}`);
-      await assert.rejects(
-        fs.access(captureFile),
-        error => error && error.code === 'ENOENT',
-        'HTTP listen was reached before required-variable validation'
-      );
-      await fs.rm(captureFile, { force: true });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.equal(response.headers['content-type'], entry.contentType);
+      assert.equal(response.body, expected);
+      assert.doesNotMatch(response.body, /WRONG_PROJECT_LOCAL_EVIDENCE_DIRECTORY/);
     });
   }
 });
 
-test('configured listen values do not replace PUBLIC_ORIGIN or Host-header checking', async t => {
-  await t.test('the exact configured public origin and Host are accepted', async () => {
-    const response = await request();
-    assert.equal(
-      response.statusCode,
-      404,
-      `valid origin did not pass through to normal unknown-route handling: ${response.body}`
-    );
-  });
-
-  await t.test('an attacker Host and matching attacker Origin are rejected', async () => {
-    const response = await request({
-      host: 'attacker.example.test',
-      origin: 'https://attacker.example.test'
-    });
-    assert.equal(response.statusCode, 403);
-  });
-
-  await t.test('a valid Host with a mismatched Origin is rejected', async () => {
-    const response = await request({ origin: 'https://attacker.example.test' });
-    assert.equal(response.statusCode, 403);
-  });
-
-  await t.test('a configured Origin with an attacker Host is rejected', async () => {
-    const response = await request({ host: 'attacker.example.test' });
-    assert.equal(response.statusCode, 403);
-  });
-});
-
-test('the existing literal 127.0.0.1 origin exception remains unchanged', async t => {
-  await t.test('literal loopback with an explicit matching port is accepted', async () => {
-    const response = await request({
-      secure: false,
-      host: '127.0.0.1:49152',
-      origin: 'http://127.0.0.1:49152'
-    });
-    assert.equal(
-      response.statusCode,
-      404,
-      `loopback origin did not reach ordinary routing: ${response.body}`
-    );
-  });
-
-  await t.test('localhost is not substituted for the literal loopback exception', async () => {
-    const response = await request({
-      secure: false,
-      host: 'localhost:49152',
-      origin: 'http://localhost:49152'
-    });
-    assert.equal(response.statusCode, 403);
-  });
-});
-
-test('Basic Auth remains ahead of origin and route handling', async () => {
+test('query and header input cannot choose a different evidence file', async () => {
+  const expected = await fs.readFile(path.join(contractEvidenceDir, '3db140f839a8.json'), 'utf8');
   const response = await request({
+    requestPath: '/evidence/session?file=3db140f839a8-trace.html&path=../server.js',
+    authenticated: false,
+    headers: {
+      'x-evidence-file': '3db140f839a8.events.jsonl',
+      'x-file-name': '../server.js'
+    }
+  });
+
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.headers['content-type'], 'application/json');
+  assert.equal(response.body, expected);
+});
+
+test('similar, encoded, nested, and filename paths are not authentication exemptions', async t => {
+  const paths = [
+    '/evidence',
+    '/evidence/',
+    '/evidence/unknown',
+    '/evidence/trace/',
+    '/evidence/trace/anything',
+    '/evidence/session/anything',
+    '/evidence/events/anything',
+    '/evidence/3db140f839a8-trace.html',
+    '/evidence/3db140f839a8.json',
+    '/evidence/3db140f839a8.events.jsonl',
+    '/evidence/%74race',
+    '/evidence/%73ession',
+    '/evidence/%65vents',
+    '/evidence%2ftrace',
+    '/evidence//trace',
+    '/evidence/./trace',
+    '/evidence/../server.js',
+    '/evidence/%2e%2e/server.js',
+    '/evidence/%2E%2E%2Fserver.js',
+    '/evidence/trace%2f..%2fsession',
+    '/definitely-not-an-existing-route'
+  ];
+
+  for (const requestPath of paths) {
+    await t.test(requestPath, async () => {
+      assertAuthRejected(
+        await request({ requestPath, authenticated: false }),
+        requestPath
+      );
+    });
+  }
+});
+
+test('no non-GET method is exempt on any evidence route', async t => {
+  for (const entry of evidenceCases) {
+    for (const method of ['HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+      await t.test(`${method} ${entry.route}`, async () => {
+        const response = await request({
+          requestPath: entry.route,
+          method,
+          authenticated: false
+        });
+        assertAuthRejected(response, `${method} ${entry.route}`);
+      });
+    }
+  }
+});
+
+test('all public evidence routes retain existing origin and PUBLIC_ORIGIN validation', async t => {
+  for (const entry of evidenceCases) {
+    await t.test(entry.route, async () => {
+      const badOrigin = await request({
+        requestPath: entry.route,
+        authenticated: false,
+        origin: 'https://attacker.example.test'
+      });
+      assert.equal(badOrigin.statusCode, 403, badOrigin.body);
+
+      const badHost = await request({
+        requestPath: entry.route,
+        authenticated: false,
+        host: 'attacker.example.test',
+        origin: 'https://attacker.example.test'
+      });
+      assert.equal(badHost.statusCode, 403, badHost.body);
+    });
+  }
+});
+
+test('ordinary routes retain Basic Auth behavior and routing behavior', async () => {
+  const unauthenticated = await request({
+    requestPath: '/definitely-not-an-existing-route',
+    authenticated: false
+  });
+  assertAuthRejected(unauthenticated, 'ordinary unauthenticated route');
+
+  const invalidCredentials = await request({
+    requestPath: '/definitely-not-an-existing-route',
+    authenticated: false,
+    headers: { authorization: authHeader('wrong', 'credentials') }
+  });
+  assertAuthRejected(invalidCredentials, 'ordinary route with invalid credentials');
+
+  const authenticated = await request({ requestPath: '/definitely-not-an-existing-route' });
+  assert.equal(authenticated.statusCode, 404, authenticated.body);
+});
+
+test('ordinary unauthenticated requests still reach Basic Auth before origin rejection', async () => {
+  const response = await request({
+    requestPath: '/definitely-not-an-existing-route',
     authenticated: false,
     host: 'attacker.example.test',
     origin: 'https://attacker.example.test'
   });
-  assert.equal(response.statusCode, 401);
-  assert.match(String(response.headers['www-authenticate'] || ''), /^Basic\b/i);
+  assertAuthRejected(response, 'ordinary route with bad origin');
+});
+
+test('ordinary authenticated routes retain origin validation', async () => {
+  const accepted = await request({ requestPath: '/definitely-not-an-existing-route' });
+  assert.equal(accepted.statusCode, 404, accepted.body);
+
+  const rejected = await request({
+    requestPath: '/definitely-not-an-existing-route',
+    origin: 'https://attacker.example.test'
+  });
+  assert.equal(rejected.statusCode, 403, rejected.body);
+});
+
+test('the shared footer retains its two evidence links and adds the exact self-hosted trace link', async () => {
+  const response = await request({ requestPath: '/' });
+  assert.equal(response.statusCode, 200, response.body);
+
+  const footerMatch = response.body.match(/<footer\b[^>]*>([\s\S]*?)<\/footer>/i);
+  assert.ok(footerMatch, 'page has no shared footer');
+
+  const anchors = [];
+  const anchorPattern = /<a\b[^>]*\bhref\s*=\s*(['"])(.*?)\1[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = anchorPattern.exec(footerMatch[1])) !== null) {
+    anchors.push({
+      href: match[2],
+      text: match[3].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+    });
+  }
+
+  assert.ok(anchors.length >= 3, `expected at least three footer links, found ${anchors.length}`);
+  assert.equal(
+    anchors.filter(link => link.href === '/evidence/trace').length,
+    1,
+    'footer must contain one link whose href is exactly /evidence/trace'
+  );
+
+  assert.ok(
+    anchors.some(link => /shipyard/i.test(`${link.href} ${link.text}`) && /dossier/i.test(`${link.href} ${link.text}`)),
+    'existing Shipyard dossier footer link was removed'
+  );
+  assert.ok(
+    anchors.some(link => /^https:\/\/github\.com\//i.test(link.href) && /evidence/i.test(`${link.href} ${link.text}`)),
+    'existing GitHub evidence-folder footer link was removed'
+  );
+});
+
+test('CLI listen defaults and configured LISTEN_HOST/PORT behavior remain intact', async () => {
+  const defaults = await captureListen();
+  assert.equal(defaults.exitCode, 0, defaults.output);
+  assert.ok(defaults.capture, `listen was not called: ${defaults.output}`);
+  assert.equal(defaults.capture.host, '127.0.0.1');
+  assert.equal(Number(defaults.capture.port), 3000);
+
+  const configuredPort = await unusedPort();
+  const configured = await captureListen({
+    LISTEN_HOST: '0.0.0.0',
+    PORT: String(configuredPort)
+  });
+  assert.equal(configured.exitCode, 0, configured.output);
+  assert.ok(configured.capture, `listen was not called: ${configured.output}`);
+  assert.equal(configured.capture.host, '0.0.0.0');
+  assert.equal(Number(configured.capture.port), configuredPort);
 });

@@ -4,5 +4,4 @@ release-manager-v2/.release-manager.json
 release-manager-v2/.release-manager.json.*.tmp
 release-manager-v2/.release-manager.json.publication.lock
 release-manager-review-ui/audit-log.jsonl
-evidence
 README.md

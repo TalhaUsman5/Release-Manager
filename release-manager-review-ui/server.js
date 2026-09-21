@@ -12,6 +12,17 @@ const LISTEN_HOST = process.env.LISTEN_HOST === undefined ? HOST : process.env.L
 const LISTEN_PORT = process.env.PORT === undefined ? PORT : process.env.PORT;
 const CLI_EXECUTABLE = 'node';
 const CLI_CWD = path.resolve(__dirname, '../release-manager-v2');
+const EVIDENCE_DIRECTORY = path.resolve(__dirname, '../evidence');
+const EVIDENCE_ROUTES = Object.freeze({
+  '/evidence/trace': '3db140f839a8-trace.html',
+  '/evidence/session': '3db140f839a8.json',
+  '/evidence/events': '3db140f839a8.events.jsonl'
+});
+const EVIDENCE_CONTENT_TYPES = Object.freeze({
+  '/evidence/trace': 'text/html',
+  '/evidence/session': 'application/json',
+  '/evidence/events': 'application/x-ndjson'
+});
 const AUDIT_PATH = path.join(__dirname, 'audit-log.jsonl');
 const COLLAPSIBLE_OUTPUT_THRESHOLD = 2000;
 const AUTHENTICATION_REALM = 'Basic realm="Release Manager"';
@@ -46,16 +57,13 @@ function renderTextWithLinks(value) {
   let result = '';
   let position = 0;
   let match;
-
   while ((match = urlPattern.exec(text)) !== null) {
     result += escapeHtml(text.slice(position, match.index));
     const url = match[0];
     result += `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`;
     position = match.index + url.length;
   }
-
-  result += escapeHtml(text.slice(position));
-  return result;
+  return result + escapeHtml(text.slice(position));
 }
 
 function humanizeKey(key) {
@@ -111,16 +119,11 @@ function readRecentActivity() {
     if (error && error.code === 'ENOENT') return null;
     return { unavailable: true };
   }
-
   const lines = contents.split(/\n/);
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     if (lines[index].length === 0) continue;
     let entry;
-    try {
-      entry = JSON.parse(lines[index]);
-    } catch (_error) {
-      continue;
-    }
+    try { entry = JSON.parse(lines[index]); } catch (_error) { continue; }
     const args = entry && entry.command && entry.command.arguments;
     const result = entry && entry.result;
     if (!Array.isArray(args) || typeof args[1] !== 'string' || typeof entry.timestamp !== 'string' || !result || !Object.prototype.hasOwnProperty.call(result, 'exitCode')) continue;
@@ -134,12 +137,7 @@ function renderRecentActivity() {
   if (activity === null) return '<div class="activity activity-empty" role="status"><span class="activity-label">Recent activity</span><span>No actions recorded yet</span></div>';
   if (activity.unavailable === true) return '<div class="activity activity-unavailable" role="status"><span class="activity-label">Recent activity</span><span>Recent activity unavailable</span></div>';
   const outcomeClass = activity.exitCode === 0 ? 'activity-success' : 'activity-failure';
-  return `<div class="activity ${outcomeClass}" role="status">
-    <span class="activity-label">Recent activity</span>
-    <span class="activity-item"><strong>Action:</strong> ${escapeHtml(activity.action)}</span>
-    <span class="activity-item"><strong>Exit code:</strong> ${activity.exitCode === null ? 'null' : escapeHtml(activity.exitCode)}</span>
-    <span class="activity-item"><strong>Timestamp:</strong> <time datetime="${escapeHtml(activity.timestamp)}">${escapeHtml(activity.timestamp)}</time></span>
-  </div>`;
+  return `<div class="activity ${outcomeClass}" role="status"><span class="activity-label">Recent activity</span><span class="activity-item"><strong>Action:</strong> ${escapeHtml(activity.action)}</span><span class="activity-item"><strong>Exit code:</strong> ${activity.exitCode === null ? 'null' : escapeHtml(activity.exitCode)}</span><span class="activity-item"><strong>Timestamp:</strong> <time datetime="${escapeHtml(activity.timestamp)}">${escapeHtml(activity.timestamp)}</time></span></div>`;
 }
 
 function layout(title, body) {
@@ -150,17 +148,13 @@ function layout(title, body) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
 <style>
-:root{color-scheme:light dark;--page:#f4f7fb;--surface:#fff;--text:#172033;--muted:#5b6577;--border:#ccd5e1;--link:#1559b7;--danger:#b42332;--success:#18794e}*{box-sizing:border-box}body{max-width:1120px;margin:auto;padding:0 1.25rem 3rem;font:16px/1.55 system-ui,sans-serif;color:var(--text);background:var(--page)}a{color:var(--link)}.site-header{margin:0 -1.25rem 2rem;padding:1rem 1.25rem;background:var(--surface);border-bottom:1px solid var(--border)}nav,.activity{display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;align-items:center}.brand{margin-right:auto;font-weight:700}.activity{margin-top:.85rem;padding:.7rem;border:1px solid var(--border);border-left:.3rem solid var(--muted)}.activity-label{font-weight:800}.activity-success{border-left-color:var(--success)}.activity-failure,.error{color:var(--danger)}section{border:1px solid var(--border);border-radius:.65rem;padding:1rem;margin:1rem 0;background:var(--surface)}dl{margin:.4rem 0}dt{font-weight:750;margin-top:.65rem}dd{margin-left:1.25rem;overflow-wrap:anywhere}pre{padding:.9rem;border:1px solid var(--border);white-space:pre-wrap;overflow-wrap:anywhere}form,label{display:grid;gap:.6rem}input,select,button{min-height:2.55rem;padding:.45rem .65rem;font:inherit}.actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1rem}.actions section{margin:0}.stream-stdout{border-left:.35rem solid #176b45}.stream-stderr{border-left:.35rem solid #a2303d}details.stream>summary{cursor:pointer;padding:.85rem;font-weight:800}
+:root{color-scheme:light dark;--page:#f4f7fb;--surface:#fff;--text:#172033;--muted:#5b6577;--border:#ccd5e1;--link:#1559b7;--danger:#b42332;--success:#18794e}*{box-sizing:border-box}body{max-width:1120px;margin:auto;padding:0 1.25rem 3rem;font:16px/1.55 system-ui,sans-serif;color:var(--text);background:var(--page)}a{color:var(--link)}.site-header{margin:0 -1.25rem 2rem;padding:1rem 1.25rem;background:var(--surface);border-bottom:1px solid var(--border)}nav,.activity{display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;align-items:center}.brand{margin-right:auto;font-weight:700}.activity{margin-top:.85rem;padding:.7rem;border:1px solid var(--border);border-left:.3rem solid var(--muted)}.activity-label{font-weight:800}.activity-success{border-left-color:var(--success)}.activity-failure,.error{color:var(--danger)}section{border:1px solid var(--border);border-radius:.65rem;padding:1rem;margin:1rem 0;background:var(--surface)}dl{margin:.4rem 0}dt{font-weight:750;margin-top:.65rem}dd{margin-left:1.25rem;overflow-wrap:anywhere}pre{padding:.9rem;border:1px solid var(--border);white-space:pre-wrap;overflow-wrap:anywhere}form,label{display:grid;gap:.6rem}input,select,button{min-height:2.55rem;padding:.45rem .65rem;font:inherit}.actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1rem}.actions section{margin:0}.stream-stdout{border-left:.35rem solid #176b45}.stream-stderr{border-left:.35rem solid #a2303d}details.stream>summary{cursor:pointer;padding:.85rem;font-weight:800}.site-footer{display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;margin-top:2rem;padding-top:1rem;border-top:1px solid var(--border)}
 </style>
 </head>
 <body>
-<header class="site-header">
-<nav aria-label="Primary navigation"><a class="brand" href="/">Release Manager Review</a><a href="/">Release status</a><a href="/audit">Audit history</a></nav>
-${renderRecentActivity()}
-</header>
-<main>
-${body}
-</main>
+<header class="site-header"><nav aria-label="Primary navigation"><a class="brand" href="/">Release Manager Review</a><a href="/">Release status</a><a href="/audit">Audit history</a></nav>${renderRecentActivity()}</header>
+<main>${body}</main>
+<footer class="site-footer"><a href="https://github.com/TalhaUsman5/Shipyard/blob/main/shipyard_dossier.html">Shipyard dossier</a><a href="https://github.com/TalhaUsman5/Shipyard/tree/main/evidence">GitHub evidence folder</a><a href="/evidence/trace">Self-hosted Shipyard execution trace</a></footer>
 </body>
 </html>`;
 }
@@ -203,9 +197,7 @@ function renderProcessStream(name, value) {
   const stream = String(value);
   const escaped = escapeHtml(stream);
   const streamClass = name === 'stdout' ? 'stream-stdout' : 'stream-stderr';
-  if (stream.length > COLLAPSIBLE_OUTPUT_THRESHOLD) {
-    return `<details class="stream ${streamClass}"><summary>${name}<span class="stream-size">${stream.length} characters — expand output</span></summary><pre>${escaped}</pre></details>`;
-  }
+  if (stream.length > COLLAPSIBLE_OUTPUT_THRESHOLD) return `<details class="stream ${streamClass}"><summary>${name}<span class="stream-size">${stream.length} characters — expand output</span></summary><pre>${escaped}</pre></details>`;
   return `<section class="stream ${streamClass}"><h3>${name}</h3><pre>${escaped}</pre></section>`;
 }
 
@@ -221,12 +213,7 @@ function appendAudit(args, result) {
   };
   return new Promise((resolve, reject) => {
     let line;
-    try {
-      line = `${JSON.stringify(entry)}\n`;
-    } catch (error) {
-      reject(error);
-      return;
-    }
+    try { line = `${JSON.stringify(entry)}\n`; } catch (error) { reject(error); return; }
     fs.appendFile(AUDIT_PATH, line, { encoding: 'utf8' }, error => error ? reject(error) : resolve(entry));
   });
 }
@@ -288,9 +275,7 @@ async function handleStatus(response) {
     return;
   }
   let status;
-  try {
-    status = JSON.parse(result.stdout);
-  } catch (error) {
+  try { status = JSON.parse(result.stdout); } catch (error) {
     sendHtml(response, 500, 'Invalid status JSON', `<h1 class="error">Invalid status JSON</h1><p>${escapeHtml(error && error.message ? error.message : String(error))}</p>${renderProcessResult(result)}`);
     return;
   }
@@ -300,11 +285,7 @@ async function handleStatus(response) {
 async function handleAction(response, action, args) {
   const result = await runCli(args);
   let auditError = null;
-  try {
-    await appendAudit(args, result);
-  } catch (error) {
-    auditError = error;
-  }
+  try { await appendAudit(args, result); } catch (error) { auditError = error; }
   const subprocessFailed = result.error !== null || result.exitCode !== 0;
   const failed = subprocessFailed || auditError !== null;
   const auditMessage = auditError ? `<section><h2 class="error">Audit write failed</h2><pre>${escapeHtml(auditError.message || String(auditError))}</pre></section>` : '<p>One result entry was appended to the audit log.</p>';
@@ -313,9 +294,7 @@ async function handleAction(response, action, args) {
 
 async function handleAudit(response) {
   let contents;
-  try {
-    contents = await fs.promises.readFile(AUDIT_PATH, 'utf8');
-  } catch (error) {
+  try { contents = await fs.promises.readFile(AUDIT_PATH, 'utf8'); } catch (error) {
     if (error.code === 'ENOENT') contents = '';
     else {
       sendHtml(response, 500, 'Audit read failed', `<h1 class="error">Audit read failed</h1><pre>${escapeHtml(error.message || String(error))}</pre>`);
@@ -332,7 +311,39 @@ async function handleAudit(response) {
   sendHtml(response, 200, 'Audit History', `<h1>Audit History</h1><p class="meta">Most recently appended entries are shown first.</p>${entries || '<p>No action entries have been recorded.</p>'}`);
 }
 
+async function handleEvidence(response, routePath) {
+  const filename = EVIDENCE_ROUTES[routePath];
+  let contents;
+  try {
+    contents = await fs.promises.readFile(path.resolve(EVIDENCE_DIRECTORY, filename));
+  } catch (_error) {
+    sendHtml(response, 500, 'Request processing failed', '<h1 class="error">Request processing failed</h1><p>The requested evidence is currently unavailable.</p>');
+    return;
+  }
+  response.writeHead(200, {
+    'Content-Type': EVIDENCE_CONTENT_TYPES[routePath],
+    'Content-Length': contents.length
+  });
+  response.end(contents);
+}
+
+function exactRequestPath(request) {
+  if (typeof request.url !== 'string' || request.url.length === 0 || request.url[0] !== '/') return null;
+  const queryIndex = request.url.indexOf('?');
+  return queryIndex === -1 ? request.url : request.url.slice(0, queryIndex);
+}
+
+function publicEvidencePathForRequest(request) {
+  if (request.method !== 'GET') return null;
+  const pathname = exactRequestPath(request);
+  if (pathname === null || !Object.prototype.hasOwnProperty.call(EVIDENCE_ROUTES, pathname)) return null;
+  return pathname;
+}
+
 async function route(request, response) {
+  const evidencePath = publicEvidencePathForRequest(request);
+  if (evidencePath !== null) return handleEvidence(response, evidencePath);
+
   const url = new URL(request.url, `http://${HOST}:${PORT}`);
   if (request.method === 'GET' && url.pathname === '/') return handleStatus(response);
   if (request.method === 'GET' && url.pathname === '/audit') return handleAudit(response);
@@ -433,7 +444,8 @@ function sendCrossOriginFailure(response, reason) {
 }
 
 const server = http.createServer((request, response) => {
-  if (!isAuthenticated(request)) {
+  const publicEvidencePath = publicEvidencePathForRequest(request);
+  if (publicEvidencePath === null && !isAuthenticated(request)) {
     sendAuthenticationFailure(response);
     return;
   }
