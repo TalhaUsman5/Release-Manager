@@ -11,7 +11,13 @@ const PORT = 3000;
 const LISTEN_HOST = process.env.LISTEN_HOST === undefined ? HOST : process.env.LISTEN_HOST;
 const LISTEN_PORT = process.env.PORT === undefined ? PORT : process.env.PORT;
 const CLI_EXECUTABLE = 'node';
-const CLI_CWD = path.resolve(__dirname, '../release-manager-v2');
+// Optional override, same pattern as LISTEN_HOST/PORT/RELEASE_MANAGER_STATE_FILE:
+// lets a test point this at an arbitrary release-manager-v2 checkout (e.g. an
+// in-progress git worktree with an unmerged fix) instead of the real sibling
+// directory, which by definition can only ever hold the last-merged code.
+const CLI_CWD = process.env.RELEASE_MANAGER_CLI_CWD === undefined
+  ? path.resolve(__dirname, '../release-manager-v2')
+  : path.resolve(process.env.RELEASE_MANAGER_CLI_CWD);
 const EVIDENCE_DIRECTORY = path.resolve(__dirname, '../evidence');
 const EVIDENCE_ROUTES = Object.freeze({
   '/evidence/trace': '3db140f839a8-trace.html',

@@ -488,6 +488,24 @@ async function approve(args) {
   if (typeof options.approver !== 'string' || !options.approver.trim()) {
     throw new CliError('INVALID_APPROVER', 'A non-empty --approver identity is required.');
   }
+
+  const approvers = typeof process.env.RELEASE_APPROVERS === 'string'
+    ? process.env.RELEASE_APPROVERS.split(',').map(identity => identity.trim()).filter(Boolean)
+    : [];
+  if (approvers.length === 0) {
+    throw new CliError(
+      'RELEASE_APPROVERS_REQUIRED',
+      'RELEASE_APPROVERS must contain at least one non-empty approver identity for approval.'
+    );
+  }
+  const submittedApprover = options.approver.trim();
+  if (!approvers.includes(submittedApprover)) {
+    throw new CliError(
+      'APPROVER_NOT_ALLOWED',
+      `Approver "${submittedApprover}" was rejected by the RELEASE_APPROVERS allowlist.`
+    );
+  }
+
   const state = readState();
   if (!state.pack) throw new CliError('PACK_REQUIRED', 'A prepared release pack is required before approval.');
   if (state.rejection) throw new CliError('PACK_REJECTED', 'The prepared pack has already been rejected.');
