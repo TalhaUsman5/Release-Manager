@@ -411,7 +411,10 @@ function sendAuthenticationFailure(response) {
 }
 
 function validatedRequestOrigin(request) {
-  const scheme = request.socket && request.socket.encrypted ? 'https' : 'http';
+  const forwardedProto = request.headers['x-forwarded-proto'];
+  const scheme = forwardedProto === undefined
+    ? (request.socket && request.socket.encrypted ? 'https' : 'http')
+    : forwardedProto;
   const host = request.headers.host;
   if (typeof host !== 'string') return null;
   const requestOrigin = `${scheme}://${host}`;

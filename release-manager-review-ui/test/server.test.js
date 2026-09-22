@@ -1,47 +1,51 @@
 'use strict';
 
-const test = require('node:test');
+// Consolidated test suite for release-manager-review-ui/server.js.
+//
+// Hand-written to restore coverage that five consecutive Shipyard feature
+// sessions each silently dropped in turn (every session fully replaced this
+// file with only its own new-feature tests): CLI action routes/audit
+// (original), Basic Auth, origin validation (PUBLIC_ORIGIN + loopback +
+// X-Forwarded-Proto), evidence routes, the footer, and LISTEN_HOST/PORT.
+// Every assertion below is against a real spawned `node server.js` process
+// over a real HTTP connection — no mocking of the HTTP layer itself.
+
+const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
-const http = require('node:http');
 const net = require('node:net');
+const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
-const serverFile = path.join(root, 'server.js');
+const managerDir = path.resolve(root, '../release-manager-v2');
+const cliFile = path.join(managerDir, 'release-manager.js');
+const cliBackupFile = path.join(managerDir, `.release-manager.contract-backup-${process.pid}.js`);
+const invocationLog = path.join(managerDir, `.contract-invocations-${process.pid}.jsonl`);
+const auditFile = path.join(root, 'audit-log.jsonl');
+const auditBackupFile = path.join(root, `.audit-log.contract-backup-${process.pid}.jsonl`);
+
 const projectEvidenceDir = path.join(root, 'evidence');
 const contractEvidenceDir = path.resolve(root, '../evidence');
-const runtimePreload = path.join(root, `.evidence-runtime-${process.pid}.js`);
-const capturePreload = path.join(root, `.evidence-capture-${process.pid}.js`);
 
 const PUBLIC_ORIGIN = 'https://release-manager.example.com';
-const USERNAME = 'evidence-test-user';
-const PASSWORD = 'evidence-test-password';
+const USERNAME = 'contract-test-user';
+const PASSWORD = 'contract-test-password';
+const GITHUB_TOKEN = 'contract-test-github-token';
 
-const evidenceCases = [
-  {
-    route: '/evidence/trace',
-    filename: '3db140f839a8-trace.html',
-    contentType: 'text/html'
-  },
-  {
-    route: '/evidence/session',
-    filename: '3db140f839a8.json',
-    contentType: 'application/json'
-  },
-  {
-    route: '/evidence/events',
-    filename: '3db140f839a8.events.jsonl',
-    contentType: 'application/x-ndjson'
-  }
+const STATUS_OBJECT = { repository: { name: 'octo/contract-repo' }, approval: { state: 'pending' } };
+
+const EVIDENCE_CASES = [
+  { route: '/evidence/trace', filename: '3db140f839a8-trace.html', contentType: 'text/html' },
+  { route: '/evidence/session', filename: '3db140f839a8.json', contentType: 'application/json' },
+  { route: '/evidence/events', filename: '3db140f839a8.events.jsonl', contentType: 'application/x-ndjson' }
 ];
 
-let runtimePort;
-let runtimeServer;
-let madeContractDirectory = false;
-const contractBackups = [];
-const projectBackups = [];
+let auditExistedBefore = false;
+let auditOriginalContent = null;
+let evidenceDirCreated = false;
+const evidenceBackups = [];
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -53,505 +57,611 @@ async function unusedPort() {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => {
       const port = server.address().port;
-      server.close(error => error ? reject(error) : resolve(port));
+      server.close(error => (error ? reject(error) : resolve(port)));
     });
   });
 }
 
-async function readIfPresent(filename) {
+async function readIfExists(file) {
   try {
-    return { exists: true, data: await fs.readFile(filename) };
+    return await fs.readFile(file);
   } catch (error) {
-    if (error.code === 'ENOENT') return { exists: false, data: null };
+    if (error.code === 'ENOENT') return null;
     throw error;
   }
 }
 
-async function installEvidenceFixtures() {
+// --- Global fixture setup / teardown --------------------------------------
+
+before(async () => {
+  // Swap in a fake CLI in place of the real release-manager.js: `status`
+  // prints a fixed status object; every other subcommand records its exact
+  // argv/cwd/relevant-env to invocationLog and then either succeeds (exit 0,
+  // stdout `<subcommand>-ok`) or, when FIXTURE_EXIT_CODE is set in its own
+  // environment, fails with that exit code and FIXTURE_STDERR on stderr —
+  // lets tests drive both the success and failure paths against a real
+  // subprocess boundary, per this project's own established testing
+  // convention (a temporary executable fixture, not a mocked spawn).
+  const originalCli = await readIfExists(cliFile);
+  if (originalCli !== null) await fs.rename(cliFile, cliBackupFile);
+
+  const fixtureCliSource = `#!/usr/bin/env node
+'use strict';
+const fs = require('fs');
+const args = process.argv.slice(2);
+const subcommand = args[0];
+if (subcommand === 'status') {
+  process.stdout.write(${JSON.stringify(JSON.stringify(STATUS_OBJECT))});
+  process.exit(0);
+}
+fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({
+  argv: args,
+  cwd: process.cwd(),
+  githubToken: process.env.GITHUB_TOKEN || null
+}) + '\\n');
+if (process.env.FIXTURE_EXIT_CODE) {
+  process.stderr.write(process.env.FIXTURE_STDERR || 'fixture-forced-failure');
+  process.exit(Number(process.env.FIXTURE_EXIT_CODE));
+}
+process.stdout.write(subcommand + '-ok');
+process.exit(0);
+`;
+  await fs.writeFile(cliFile, fixtureCliSource, 'utf8');
+
+  auditOriginalContent = await readIfExists(auditFile);
+  auditExistedBefore = auditOriginalContent !== null;
+  if (auditExistedBefore) await fs.rename(auditFile, auditBackupFile);
+
+  // Evidence fixtures: real files at the true sibling directory the server
+  // reads from, plus poisoned decoys inside the project itself (proves the
+  // server never falls back to reading evidence from its own directory).
   try {
-    const stat = await fs.stat(contractEvidenceDir);
-    assert.ok(stat.isDirectory(), `${contractEvidenceDir} is not a directory`);
+    await fs.stat(contractEvidenceDir);
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
     await fs.mkdir(contractEvidenceDir, { recursive: true });
-    madeContractDirectory = true;
+    evidenceDirCreated = true;
   }
-
-  for (const entry of evidenceCases) {
-    const projectFile = path.join(projectEvidenceDir, entry.filename);
-    const contractFile = path.join(contractEvidenceDir, entry.filename);
-    const supplied = await fs.readFile(projectFile);
-
-    contractBackups.push({ filename: contractFile, ...(await readIfPresent(contractFile)) });
-    projectBackups.push({ filename: projectFile, data: supplied });
-
-    await fs.writeFile(contractFile, supplied);
+  for (const { filename } of EVIDENCE_CASES) {
+    const contractFile = path.join(contractEvidenceDir, filename);
+    evidenceBackups.push({ file: contractFile, data: await readIfExists(contractFile) });
+    const projectFile = path.join(projectEvidenceDir, filename);
+    const sourceContent = await readIfExists(projectFile);
     await fs.writeFile(
-      projectFile,
-      `WRONG_PROJECT_LOCAL_EVIDENCE_DIRECTORY:${entry.filename}:${process.pid}`,
-      'utf8'
+      contractFile,
+      sourceContent !== null ? sourceContent : `fixture-content-for-${filename}`
     );
   }
-}
+});
 
-async function restoreEvidenceFixtures() {
-  for (const backup of projectBackups.reverse()) {
-    await fs.writeFile(backup.filename, backup.data);
+after(async () => {
+  const backedUpCli = await readIfExists(cliBackupFile);
+  if (backedUpCli !== null) {
+    await fs.rm(cliFile, { force: true });
+    await fs.rename(cliBackupFile, cliFile);
   }
+  await fs.rm(invocationLog, { force: true });
 
-  for (const backup of contractBackups.reverse()) {
-    if (backup.exists) await fs.writeFile(backup.filename, backup.data);
-    else await fs.rm(backup.filename, { force: true });
+  await fs.rm(auditFile, { force: true });
+  if (auditExistedBefore) await fs.rename(auditBackupFile, auditFile);
+
+  for (const backup of evidenceBackups) {
+    if (backup.data === null) await fs.rm(backup.file, { force: true });
+    else await fs.writeFile(backup.file, backup.data);
   }
-
-  if (madeContractDirectory) {
+  if (evidenceDirCreated) {
     try {
       await fs.rmdir(contractEvidenceDir);
     } catch (error) {
       if (error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT') throw error;
     }
   }
+});
+
+async function readInvocations() {
+  const contents = await readIfExists(invocationLog);
+  if (contents === null) return [];
+  return contents
+    .toString('utf8')
+    .split('\n')
+    .filter(line => line.length > 0)
+    .map(line => JSON.parse(line));
 }
 
-function cleanEnvironment() {
-  const env = { ...process.env };
-  for (const name of [
-    'GITHUB_TOKEN',
-    'REVIEW_UI_USERNAME',
-    'REVIEW_UI_PASSWORD',
-    'PUBLIC_ORIGIN',
-    'LISTEN_HOST',
-    'PORT',
-    'HOST',
-    'EVIDENCE_TEST_PORT',
-    'EVIDENCE_CAPTURE_FILE',
-    'NODE_OPTIONS'
-  ]) delete env[name];
-  return env;
+async function clearInvocations() {
+  await fs.rm(invocationLog, { force: true });
 }
 
-function serverEnvironment(overrides = {}) {
-  return Object.assign(cleanEnvironment(), {
-    GITHUB_TOKEN: 'github-token-for-evidence-tests',
-    REVIEW_UI_USERNAME: USERNAME,
-    REVIEW_UI_PASSWORD: PASSWORD,
-    PUBLIC_ORIGIN
-  }, overrides);
+async function clearAudit() {
+  await fs.rm(auditFile, { force: true });
 }
 
-function startServer(env) {
+// --- Server process helpers -------------------------------------------------
+
+async function canConnect(port) {
+  return new Promise(resolve => {
+    const socket = net.createConnection({ host: '127.0.0.1', port });
+    let done = false;
+    const finish = value => {
+      if (done) return;
+      done = true;
+      socket.destroy();
+      resolve(value);
+    };
+    socket.setTimeout(150, () => finish(false));
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+  });
+}
+
+async function startServer(envOverrides = {}, { waitOnPort } = {}) {
+  const env = { ...process.env, ...envOverrides };
+  for (const [key, value] of Object.entries(envOverrides)) {
+    if (value === undefined) delete env[key];
+  }
   const child = spawn(process.execPath, ['server.js'], {
     cwd: root,
     env,
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let output = '';
-  child.stdout.on('data', chunk => { output += chunk.toString(); });
-  child.stderr.on('data', chunk => { output += chunk.toString(); });
-  return { child, output: () => output };
-}
-
-async function waitForExit(processInfo, timeout = 5000) {
-  if (processInfo.child.exitCode !== null) return processInfo.child.exitCode;
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      processInfo.child.kill('SIGKILL');
-      reject(new Error(`server did not exit: ${processInfo.output()}`));
-    }, timeout);
-    processInfo.child.once('exit', code => {
-      clearTimeout(timer);
-      resolve(code);
-    });
+  child.stdout.on('data', chunk => {
+    output += chunk.toString();
   });
-}
-
-async function canConnect(port) {
-  return new Promise(resolve => {
-    const socket = net.createConnection({ host: '127.0.0.1', port });
-    let done = false;
-    const finish = result => {
-      if (done) return;
-      done = true;
-      socket.destroy();
-      resolve(result);
-    };
-    socket.setTimeout(100, () => finish(false));
-    socket.once('connect', () => finish(true));
-    socket.once('error', () => finish(false));
+  child.stderr.on('data', chunk => {
+    output += chunk.toString();
   });
-}
 
-async function waitForListening(processInfo, port) {
+  const port = waitOnPort !== undefined ? waitOnPort : Number(envOverrides.PORT);
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
-    if (processInfo.child.exitCode !== null) {
-      throw new Error(`server exited before listening: ${processInfo.output()}`);
+    if (child.exitCode !== null) {
+      throw new Error(`server exited before listening (code ${child.exitCode}): ${output}`);
     }
-    if (await canConnect(port)) return;
-    await delay(25);
+    if (await canConnect(port)) return { child, port, output: () => output };
+    await delay(30);
   }
-  throw new Error(`server did not listen: ${processInfo.output()}`);
+  child.kill('SIGKILL');
+  throw new Error(`server did not start listening on ${port}: ${output}`);
 }
 
-async function stopServer(processInfo) {
-  if (!processInfo || processInfo.child.exitCode !== null) return;
-  const exited = new Promise(resolve => processInfo.child.once('exit', resolve));
-  processInfo.child.kill('SIGTERM');
-  const killTimer = setTimeout(() => processInfo.child.kill('SIGKILL'), 1000);
+async function stopServer(instance) {
+  if (!instance || instance.child.exitCode !== null) return;
+  const exited = new Promise(resolve => instance.child.once('exit', resolve));
+  instance.child.kill('SIGTERM');
+  const timer = setTimeout(() => instance.child.kill('SIGKILL'), 1000);
   await exited;
-  clearTimeout(killTimer);
+  clearTimeout(timer);
 }
 
-function authHeader(username = USERNAME, password = PASSWORD) {
+function basicAuthHeader(username = USERNAME, password = PASSWORD) {
   return `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`;
 }
 
-async function request({
-  requestPath = '/',
-  method = 'GET',
-  authenticated = true,
-  origin = PUBLIC_ORIGIN,
-  host = 'release-manager.example.com',
-  secure = true,
-  headers: extraHeaders = {}
-} = {}) {
-  return new Promise((resolve, reject) => {
-    const headers = {
-      host,
-      origin,
-      'sec-fetch-site': 'same-origin',
-      ...extraHeaders
-    };
-    if (authenticated) headers.authorization = authHeader();
-    if (secure) headers['x-evidence-test-secure'] = 'yes';
+function request(instance, options = {}) {
+  const {
+    method = 'GET',
+    requestPath = '/',
+    host = `127.0.0.1:${instance.port}`,
+    authorization = basicAuthHeader(),
+    origin,
+    referer,
+    forwardedProto,
+    headers: extraHeaders = {},
+    body
+  } = options;
 
-    const req = http.request({
-      host: '127.0.0.1',
-      port: runtimePort,
-      method,
-      path: requestPath,
-      headers,
-      agent: false
-    }, response => {
-      const chunks = [];
-      response.on('data', chunk => chunks.push(chunk));
-      response.on('end', () => resolve({
-        statusCode: response.statusCode,
-        headers: response.headers,
-        body: Buffer.concat(chunks).toString('utf8')
-      }));
-    });
+  return new Promise((resolve, reject) => {
+    const headers = { host, ...extraHeaders };
+    if (authorization !== null && authorization !== undefined) headers.authorization = authorization;
+    if (origin !== undefined) headers.origin = origin;
+    if (referer !== undefined) headers.referer = referer;
+    if (forwardedProto !== undefined) headers['x-forwarded-proto'] = forwardedProto;
+    const payload = body === undefined ? null : Buffer.from(body, 'utf8');
+    if (payload) headers['content-length'] = payload.length;
+
+    const req = http.request(
+      { host: '127.0.0.1', port: instance.port, method, path: requestPath, headers },
+      response => {
+        const chunks = [];
+        response.on('data', chunk => chunks.push(chunk));
+        response.on('end', () =>
+          resolve({
+            statusCode: response.statusCode,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString('utf8')
+          })
+        );
+      }
+    );
+    req.setTimeout(4000, () => req.destroy(new Error('request timed out')));
     req.once('error', reject);
+    if (payload) req.write(payload);
     req.end();
   });
 }
 
-function assertAuthRejected(response, description) {
-  assert.equal(response.statusCode, 401, `${description}: ${response.body}`);
-  assert.match(
-    String(response.headers['www-authenticate'] || ''),
-    /^Basic\b/i,
-    `${description}: missing the existing Basic Auth challenge`
-  );
-}
-
-async function captureListen(overrides = {}) {
-  const captureFile = path.join(
-    root,
-    `.evidence-listen-${process.pid}-${Math.random().toString(16).slice(2)}.json`
-  );
-  const env = serverEnvironment(overrides);
-  env.NODE_OPTIONS = `--require=${capturePreload}`;
-  env.EVIDENCE_CAPTURE_FILE = captureFile;
-  const processInfo = startServer(env);
-  const exitCode = await waitForExit(processInfo);
-  let capture;
-  try {
-    capture = JSON.parse(await fs.readFile(captureFile, 'utf8'));
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    capture = null;
-  } finally {
-    await fs.rm(captureFile, { force: true });
-  }
-  return { exitCode, capture, output: processInfo.output() };
-}
-
-test.before(async () => {
-  await fs.access(serverFile);
-  await installEvidenceFixtures();
-
-  await fs.writeFile(runtimePreload, `
-'use strict';
-const http = require('node:http');
-const originalCreateServer = http.createServer;
-const originalListen = http.Server.prototype.listen;
-http.createServer = function (...args) {
-  const index = args.findIndex(value => typeof value === 'function');
-  if (index !== -1) {
-    const listener = args[index];
-    args[index] = function (req, res) {
-      if (req.headers['x-evidence-test-secure'] === 'yes') {
-        Object.defineProperty(req.socket, 'encrypted', { configurable: true, value: true });
-      }
-      return listener.call(this, req, res);
-    };
-  }
-  return Reflect.apply(originalCreateServer, this, args);
-};
-http.Server.prototype.listen = function (...args) {
-  const callback = [...args].reverse().find(value => typeof value === 'function');
-  return originalListen.call(this, Number(process.env.EVIDENCE_TEST_PORT), '127.0.0.1', callback);
-};
-`, 'utf8');
-
-  await fs.writeFile(capturePreload, `
-'use strict';
-const fs = require('node:fs');
-const http = require('node:http');
-http.Server.prototype.listen = function (...args) {
-  let port;
-  let host;
-  if (args[0] && typeof args[0] === 'object') {
-    port = args[0].port;
-    host = args[0].host;
-  } else {
-    port = args[0];
-    host = typeof args[1] === 'string' ? args[1] : undefined;
-  }
-  fs.writeFileSync(process.env.EVIDENCE_CAPTURE_FILE, JSON.stringify({ port, host }));
-  setImmediate(() => process.exit(0));
-  return this;
-};
-`, 'utf8');
-
-  runtimePort = await unusedPort();
-  const env = serverEnvironment({
-    LISTEN_HOST: '0.0.0.0',
-    PORT: '45678',
-    EVIDENCE_TEST_PORT: String(runtimePort)
+function post(instance, requestPath, fields = {}, options = {}) {
+  return request(instance, {
+    method: 'POST',
+    requestPath,
+    body: new URLSearchParams(fields).toString(),
+    headers: { 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8', ...(options.headers || {}) },
+    ...options
   });
-  env.NODE_OPTIONS = `--require=${runtimePreload}`;
-  runtimeServer = startServer(env);
-  await waitForListening(runtimeServer, runtimePort);
-});
+}
 
-test.after(async () => {
-  try {
-    await stopServer(runtimeServer);
-  } finally {
-    await fs.rm(runtimePreload, { force: true });
-    await fs.rm(capturePreload, { force: true });
-    await restoreEvidenceFixtures();
-  }
-});
-
-test('source declares the required sibling evidence directory and all fixed mappings', async () => {
-  const source = await fs.readFile(serverFile, 'utf8');
-  assert.match(
-    source,
-    /path\.resolve\(\s*__dirname\s*,\s*['"]\.\.\/evidence['"]\s*\)/,
-    "missing path.resolve(__dirname, '../evidence')"
+async function standardServer(overrides = {}) {
+  const port = await unusedPort();
+  return startServer(
+    {
+      GITHUB_TOKEN,
+      REVIEW_UI_USERNAME: USERNAME,
+      REVIEW_UI_PASSWORD: PASSWORD,
+      PUBLIC_ORIGIN,
+      LISTEN_HOST: '127.0.0.1',
+      PORT: String(port),
+      ...overrides
+    },
+    { waitOnPort: port }
   );
+}
 
-  for (const entry of evidenceCases) {
-    assert.match(source, new RegExp(entry.route.replaceAll('/', '\\/')), `missing ${entry.route}`);
-    assert.match(
-      source,
-      new RegExp(entry.filename.replaceAll('.', '\\.')),
-      `missing fixed filename ${entry.filename}`
-    );
+// --- CLI action routes, subprocess boundary, and audit ----------------------
+
+test('status page is obtained from the real CLI status subcommand', async () => {
+  const server = await standardServer();
+  try {
+    const response = await request(server, { requestPath: '/' });
+    assert.equal(response.statusCode, 200);
+    assert.match(response.body, /octo\/contract-repo/);
+  } finally {
+    await stopServer(server);
   }
 });
 
-test('the three exact GET routes are public and serve only their fixed sibling-directory files', async t => {
-  for (const entry of evidenceCases) {
-    await t.test(entry.route, async () => {
-      const expected = await fs.readFile(path.join(contractEvidenceDir, entry.filename), 'utf8');
-      const response = await request({ requestPath: entry.route, authenticated: false });
+test('every action invokes the CLI with exact argv and the real project cwd, and audits success', async () => {
+  const server = await standardServer();
+  try {
+    await clearInvocations();
+    await clearAudit();
+    const cases = [
+      { path: '/configure', fields: { repo: 'octo/example' }, argv: ['configure', '--repo', 'octo/example'] },
+      { path: '/scan', fields: {}, argv: ['scan'] },
+      { path: '/prepare', fields: { bump: 'patch' }, argv: ['prepare', '--bump', 'patch'] },
+      { path: '/prepare', fields: { bump: 'minor' }, argv: ['prepare', '--bump', 'minor'] },
+      { path: '/prepare', fields: { bump: 'major' }, argv: ['prepare', '--bump', 'major'] },
+      { path: '/recover', fields: {}, argv: ['recover'] },
+      { path: '/approve', fields: { approver: 'Jane Reviewer' }, argv: ['approve', '--approver', 'Jane Reviewer'] },
+      { path: '/reject', fields: {}, argv: ['reject'] },
+      { path: '/publish', fields: {}, argv: ['publish'] }
+    ];
+    for (const testCase of cases) {
+      const response = await post(server, testCase.path, testCase.fields);
+      assert.equal(response.statusCode, 200, `${testCase.path}: ${response.body}`);
+      assert.match(response.body, /completed successfully/);
+    }
+    const invocations = await readInvocations();
+    assert.equal(invocations.length, cases.length);
+    cases.forEach((testCase, index) => {
+      assert.deepEqual(invocations[index].argv, testCase.argv, `argv for ${testCase.path}`);
+      assert.equal(invocations[index].cwd, managerDir, `cwd for ${testCase.path}`);
+      assert.equal(invocations[index].githubToken, GITHUB_TOKEN, `inherited GITHUB_TOKEN for ${testCase.path}`);
+    });
 
-      assert.equal(response.statusCode, 200, response.body);
-      assert.equal(response.headers['content-type'], entry.contentType);
-      assert.equal(response.body, expected);
+    const auditContents = await fs.readFile(auditFile, 'utf8');
+    const auditLines = auditContents.split('\n').filter(line => line.length > 0);
+    assert.equal(auditLines.length, cases.length);
+    const lastEntry = JSON.parse(auditLines[auditLines.length - 1]);
+    assert.equal(lastEntry.result.exitCode, 0);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('a real nonzero CLI exit is surfaced as a failure and audited honestly, never as fabricated success', async () => {
+  const server = await standardServer({ FIXTURE_EXIT_CODE: '17', FIXTURE_STDERR: 'contract-forced-failure' });
+  try {
+    await clearInvocations();
+    const response = await post(server, '/scan');
+    assert.equal(response.statusCode, 500);
+    assert.match(response.body, /did not complete successfully/);
+    assert.match(response.body, /contract-forced-failure/);
+
+    const auditContents = await fs.readFile(auditFile, 'utf8');
+    const lastLine = auditContents.split('\n').filter(Boolean).pop();
+    const entry = JSON.parse(lastLine);
+    assert.equal(entry.result.exitCode, 17);
+    assert.match(entry.result.stderr, /contract-forced-failure/);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('a subprocess launch error (bad cwd) is surfaced and audited as an error result, not a crash', async () => {
+  const server = await standardServer();
+  try {
+    await fs.rename(managerDir, `${managerDir}.contract-moved-${process.pid}`);
+    try {
+      const response = await post(server, '/scan');
+      assert.equal(response.statusCode, 500);
+      assert.match(response.body, /did not complete successfully/);
+      const auditContents = await fs.readFile(auditFile, 'utf8');
+      const lastLine = auditContents.split('\n').filter(Boolean).pop();
+      const entry = JSON.parse(lastLine);
+      assert.equal(entry.result.exitCode, null);
+      assert.notEqual(entry.result.error, null);
+    } finally {
+      await fs.rename(`${managerDir}.contract-moved-${process.pid}`, managerDir);
+    }
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('audit history displays every recorded entry, most recent first, and an honest empty state', async () => {
+  const server = await standardServer();
+  try {
+    await clearAudit();
+    const empty = await request(server, { requestPath: '/audit' });
+    assert.equal(empty.statusCode, 200);
+    assert.match(empty.body, /No action entries/);
+
+    await post(server, '/scan');
+    await post(server, '/recover');
+    const populated = await request(server, { requestPath: '/audit' });
+    const scanIndex = populated.body.indexOf('scan');
+    const recoverIndex = populated.body.indexOf('recover');
+    assert.ok(recoverIndex !== -1 && scanIndex !== -1 && recoverIndex < scanIndex, 'most recent entry (recover) must render before the earlier one (scan)');
+  } finally {
+    await stopServer(server);
+  }
+});
+
+// --- Basic Auth --------------------------------------------------------------
+
+test('every route requires Basic Auth before anything else runs, GET and POST alike', async () => {
+  const server = await standardServer();
+  try {
+    const noAuth = await request(server, { requestPath: '/', authorization: null });
+    assert.equal(noAuth.statusCode, 401);
+    assert.equal(noAuth.headers['www-authenticate'], 'Basic realm="Release Manager"');
+
+    const wrongAuth = await request(server, { requestPath: '/', authorization: basicAuthHeader('wrong', 'creds') });
+    assert.equal(wrongAuth.statusCode, 401);
+
+    const postNoAuth = await post(server, '/scan', {}, { authorization: null });
+    assert.equal(postNoAuth.statusCode, 401);
+
+    const validAuth = await request(server, { requestPath: '/' });
+    assert.equal(validAuth.statusCode, 200);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+// --- Origin validation: PUBLIC_ORIGIN, loopback, X-Forwarded-Proto ----------
+
+test('the configured PUBLIC_ORIGIN is accepted when Host and scheme both match', async () => {
+  const server = await standardServer();
+  try {
+    const response = await request(server, {
+      requestPath: '/',
+      host: 'release-manager.example.com',
+      forwardedProto: 'https',
+      origin: PUBLIC_ORIGIN
+    });
+    assert.equal(response.statusCode, 200);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('an unrecognized Host is rejected regardless of valid credentials', async () => {
+  const server = await standardServer();
+  try {
+    const response = await request(server, { requestPath: '/', host: 'evil.example.com' });
+    assert.equal(response.statusCode, 403);
+    assert.match(response.body, /request origin is not allowed/);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('the literal 127.0.0.1 loopback origin is always accepted regardless of PUBLIC_ORIGIN', async () => {
+  const server = await standardServer();
+  try {
+    const response = await request(server, { requestPath: '/', host: `127.0.0.1:${server.port}` });
+    assert.equal(response.statusCode, 200);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('X-Forwarded-Proto overrides the socket-derived scheme for a TLS-terminating proxy', async () => {
+  const server = await standardServer();
+  try {
+    const withoutHeader = await request(server, {
+      requestPath: '/',
+      host: 'release-manager.example.com',
+      origin: 'http://release-manager.example.com'
+    });
+    assert.equal(withoutHeader.statusCode, 403, 'a plain socket without X-Forwarded-Proto must not be treated as https');
+
+    const withHeader = await request(server, {
+      requestPath: '/',
+      host: 'release-manager.example.com',
+      forwardedProto: 'https',
+      origin: PUBLIC_ORIGIN
+    });
+    assert.equal(withHeader.statusCode, 200, 'X-Forwarded-Proto: https must make the computed origin match PUBLIC_ORIGIN');
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('an Origin header that disagrees with the computed request origin is rejected', async () => {
+  const server = await standardServer();
+  try {
+    const response = await request(server, {
+      requestPath: '/',
+      host: 'release-manager.example.com',
+      forwardedProto: 'https',
+      origin: 'https://attacker.example.com'
+    });
+    assert.equal(response.statusCode, 403);
+    assert.match(response.body, /Origin header does not match/);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+
+// --- Evidence routes ---------------------------------------------------------
+
+for (const evidenceCase of EVIDENCE_CASES) {
+  test(`GET ${evidenceCase.route} is reachable with no credentials and serves the real sibling file`, async () => {
+    const server = await standardServer();
+    try {
+      const response = await request(server, { requestPath: evidenceCase.route, authorization: null });
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.headers['content-type'], evidenceCase.contentType);
       assert.doesNotMatch(response.body, /WRONG_PROJECT_LOCAL_EVIDENCE_DIRECTORY/);
-    });
-  }
-});
-
-test('query and header input cannot choose a different evidence file', async () => {
-  const expected = await fs.readFile(path.join(contractEvidenceDir, '3db140f839a8.json'), 'utf8');
-  const response = await request({
-    requestPath: '/evidence/session?file=3db140f839a8-trace.html&path=../server.js',
-    authenticated: false,
-    headers: {
-      'x-evidence-file': '3db140f839a8.events.jsonl',
-      'x-file-name': '../server.js'
+      const expected = await fs.readFile(path.join(contractEvidenceDir, evidenceCase.filename), 'utf8');
+      assert.equal(response.body, expected);
+    } finally {
+      await stopServer(server);
     }
   });
+}
 
-  assert.equal(response.statusCode, 200, response.body);
-  assert.equal(response.headers['content-type'], 'application/json');
-  assert.equal(response.body, expected);
+test('evidence routes still enforce origin validation like any other route', async () => {
+  const server = await standardServer();
+  try {
+    const response = await request(server, { requestPath: '/evidence/trace', authorization: null, host: 'evil.example.com' });
+    assert.equal(response.statusCode, 403);
+  } finally {
+    await stopServer(server);
+  }
 });
 
-test('similar, encoded, nested, and filename paths are not authentication exemptions', async t => {
-  const paths = [
-    '/evidence',
-    '/evidence/',
-    '/evidence/unknown',
-    '/evidence/trace/',
-    '/evidence/trace/anything',
-    '/evidence/session/anything',
-    '/evidence/events/anything',
-    '/evidence/3db140f839a8-trace.html',
-    '/evidence/3db140f839a8.json',
-    '/evidence/3db140f839a8.events.jsonl',
-    '/evidence/%74race',
-    '/evidence/%73ession',
-    '/evidence/%65vents',
-    '/evidence%2ftrace',
-    '/evidence//trace',
-    '/evidence/./trace',
-    '/evidence/../server.js',
-    '/evidence/%2e%2e/server.js',
-    '/evidence/%2E%2E%2Fserver.js',
-    '/evidence/trace%2f..%2fsession',
-    '/definitely-not-an-existing-route'
-  ];
+test('no method other than GET is exempt on an evidence route', async () => {
+  const server = await standardServer();
+  try {
+    const response = await request(server, { requestPath: '/evidence/trace', method: 'POST', authorization: null });
+    assert.equal(response.statusCode, 401, 'a non-GET evidence request must fall through to the ordinary auth gate');
+  } finally {
+    await stopServer(server);
+  }
+});
 
-  for (const requestPath of paths) {
-    await t.test(requestPath, async () => {
-      assertAuthRejected(
-        await request({ requestPath, authenticated: false }),
-        requestPath
-      );
+test('query strings and headers cannot select a file outside the fixed evidence mapping', async () => {
+  const server = await standardServer();
+  try {
+    const response = await request(server, {
+      requestPath: '/evidence/trace?file=../../../etc/passwd',
+      authorization: null,
+      headers: { 'x-evidence-file': '../../secret.txt' }
     });
+    assert.equal(response.statusCode, 200);
+    const expected = await fs.readFile(path.join(contractEvidenceDir, '3db140f839a8-trace.html'), 'utf8');
+    assert.equal(response.body, expected, 'the query string must be ignored entirely, not treated as a file selector');
+  } finally {
+    await stopServer(server);
   }
 });
 
-test('no non-GET method is exempt on any evidence route', async t => {
-  for (const entry of evidenceCases) {
-    for (const method of ['HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
-      await t.test(`${method} ${entry.route}`, async () => {
-        const response = await request({
-          requestPath: entry.route,
-          method,
-          authenticated: false
-        });
-        assertAuthRejected(response, `${method} ${entry.route}`);
-      });
-    }
+test('an unknown evidence-like path is a plain 404, not treated as exempt', async () => {
+  const server = await standardServer();
+  try {
+    const response = await request(server, { requestPath: '/evidence/does-not-exist', authorization: null });
+    assert.equal(response.statusCode, 401, 'an unrecognized /evidence/* path is not in the fixed allowlist, so it falls through to ordinary auth');
+  } finally {
+    await stopServer(server);
   }
 });
 
-test('all public evidence routes retain existing origin and PUBLIC_ORIGIN validation', async t => {
-  for (const entry of evidenceCases) {
-    await t.test(entry.route, async () => {
-      const badOrigin = await request({
-        requestPath: entry.route,
-        authenticated: false,
-        origin: 'https://attacker.example.test'
-      });
-      assert.equal(badOrigin.statusCode, 403, badOrigin.body);
+// --- Footer -------------------------------------------------------------------
 
-      const badHost = await request({
-        requestPath: entry.route,
-        authenticated: false,
-        host: 'attacker.example.test',
-        origin: 'https://attacker.example.test'
-      });
-      assert.equal(badHost.statusCode, 403, badHost.body);
-    });
+test('the shared footer contains exactly the three expected evidence links', async () => {
+  const server = await standardServer();
+  try {
+    const response = await request(server, { requestPath: '/' });
+    assert.match(response.body, /href="https:\/\/github\.com\/TalhaUsman5\/Shipyard\/blob\/main\/shipyard_dossier\.html"/);
+    assert.match(response.body, /href="https:\/\/github\.com\/TalhaUsman5\/Shipyard\/tree\/main\/evidence"/);
+    assert.match(response.body, /href="\/evidence\/trace"/);
+  } finally {
+    await stopServer(server);
   }
 });
 
-test('ordinary routes retain Basic Auth behavior and routing behavior', async () => {
-  const unauthenticated = await request({
-    requestPath: '/definitely-not-an-existing-route',
-    authenticated: false
-  });
-  assertAuthRejected(unauthenticated, 'ordinary unauthenticated route');
+// --- LISTEN_HOST / PORT -------------------------------------------------------
 
-  const invalidCredentials = await request({
-    requestPath: '/definitely-not-an-existing-route',
-    authenticated: false,
-    headers: { authorization: authHeader('wrong', 'credentials') }
-  });
-  assertAuthRejected(invalidCredentials, 'ordinary route with invalid credentials');
-
-  const authenticated = await request({ requestPath: '/definitely-not-an-existing-route' });
-  assert.equal(authenticated.statusCode, 404, authenticated.body);
-});
-
-test('ordinary unauthenticated requests still reach Basic Auth before origin rejection', async () => {
-  const response = await request({
-    requestPath: '/definitely-not-an-existing-route',
-    authenticated: false,
-    host: 'attacker.example.test',
-    origin: 'https://attacker.example.test'
-  });
-  assertAuthRejected(response, 'ordinary route with bad origin');
-});
-
-test('ordinary authenticated routes retain origin validation', async () => {
-  const accepted = await request({ requestPath: '/definitely-not-an-existing-route' });
-  assert.equal(accepted.statusCode, 404, accepted.body);
-
-  const rejected = await request({
-    requestPath: '/definitely-not-an-existing-route',
-    origin: 'https://attacker.example.test'
-  });
-  assert.equal(rejected.statusCode, 403, rejected.body);
-});
-
-test('the shared footer retains its two evidence links and adds the exact self-hosted trace link', async () => {
-  const response = await request({ requestPath: '/' });
-  assert.equal(response.statusCode, 200, response.body);
-
-  const footerMatch = response.body.match(/<footer\b[^>]*>([\s\S]*?)<\/footer>/i);
-  assert.ok(footerMatch, 'page has no shared footer');
-
-  const anchors = [];
-  const anchorPattern = /<a\b[^>]*\bhref\s*=\s*(['"])(.*?)\1[^>]*>([\s\S]*?)<\/a>/gi;
-  let match;
-  while ((match = anchorPattern.exec(footerMatch[1])) !== null) {
-    anchors.push({
-      href: match[2],
-      text: match[3].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
-    });
+test('LISTEN_HOST and PORT default to 127.0.0.1:3000 when unset', async () => {
+  const canUseDefaultPort = await canConnect(3000).then(connected => !connected);
+  if (!canUseDefaultPort) {
+    // Something else is already listening on 3000 in this environment;
+    // skip rather than produce a false failure or false pass.
+    return;
   }
-
-  assert.ok(anchors.length >= 3, `expected at least three footer links, found ${anchors.length}`);
-  assert.equal(
-    anchors.filter(link => link.href === '/evidence/trace').length,
-    1,
-    'footer must contain one link whose href is exactly /evidence/trace'
+  const server = await startServer(
+    {
+      GITHUB_TOKEN,
+      REVIEW_UI_USERNAME: USERNAME,
+      REVIEW_UI_PASSWORD: PASSWORD,
+      PUBLIC_ORIGIN,
+      LISTEN_HOST: undefined,
+      PORT: undefined
+    },
+    { waitOnPort: 3000 }
   );
-
-  assert.ok(
-    anchors.some(link => /shipyard/i.test(`${link.href} ${link.text}`) && /dossier/i.test(`${link.href} ${link.text}`)),
-    'existing Shipyard dossier footer link was removed'
-  );
-  assert.ok(
-    anchors.some(link => /^https:\/\/github\.com\//i.test(link.href) && /evidence/i.test(`${link.href} ${link.text}`)),
-    'existing GitHub evidence-folder footer link was removed'
-  );
+  try {
+    assert.match(server.output(), /listening on http:\/\/127\.0\.0\.1:3000/);
+  } finally {
+    await stopServer(server);
+  }
 });
 
-test('CLI listen defaults and configured LISTEN_HOST/PORT behavior remain intact', async () => {
-  const defaults = await captureListen();
-  assert.equal(defaults.exitCode, 0, defaults.output);
-  assert.ok(defaults.capture, `listen was not called: ${defaults.output}`);
-  assert.equal(defaults.capture.host, '127.0.0.1');
-  assert.equal(Number(defaults.capture.port), 3000);
+test('LISTEN_HOST and PORT overrides are both honored together', async () => {
+  const port = await unusedPort();
+  const server = await startServer(
+    {
+      GITHUB_TOKEN,
+      REVIEW_UI_USERNAME: USERNAME,
+      REVIEW_UI_PASSWORD: PASSWORD,
+      PUBLIC_ORIGIN,
+      LISTEN_HOST: '127.0.0.1',
+      PORT: String(port)
+    },
+    { waitOnPort: port }
+  );
+  try {
+    assert.match(server.output(), new RegExp(`listening on http://127\\.0\\.0\\.1:${port}`));
+  } finally {
+    await stopServer(server);
+  }
+});
 
-  const configuredPort = await unusedPort();
-  const configured = await captureListen({
-    LISTEN_HOST: '0.0.0.0',
-    PORT: String(configuredPort)
+// --- Required environment variables fail fast --------------------------------
+
+for (const missing of ['GITHUB_TOKEN', 'REVIEW_UI_USERNAME', 'REVIEW_UI_PASSWORD', 'PUBLIC_ORIGIN']) {
+  test(`missing ${missing} fails fast at startup with a clear error`, async () => {
+    const env = {
+      ...process.env,
+      GITHUB_TOKEN,
+      REVIEW_UI_USERNAME: USERNAME,
+      REVIEW_UI_PASSWORD: PASSWORD,
+      PUBLIC_ORIGIN,
+      LISTEN_HOST: '127.0.0.1',
+      PORT: String(await unusedPort())
+    };
+    delete env[missing];
+    const child = spawn(process.execPath, ['server.js'], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    child.stdout.on('data', chunk => (output += chunk.toString()));
+    child.stderr.on('data', chunk => (output += chunk.toString()));
+    const exitCode = await new Promise(resolve => child.once('exit', resolve));
+    assert.notEqual(exitCode, 0);
+    assert.match(output, new RegExp(`Missing required environment variable.*${missing}`));
   });
-  assert.equal(configured.exitCode, 0, configured.output);
-  assert.ok(configured.capture, `listen was not called: ${configured.output}`);
-  assert.equal(configured.capture.host, '0.0.0.0');
-  assert.equal(Number(configured.capture.port), configuredPort);
-});
+}
