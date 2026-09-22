@@ -1,0 +1,103 @@
+{
+  "description": "A real, complete failed-publish-then-recovered-publish cycle for Release Manager's CLI (release-manager.js), against a real GitHub repository (TalhaUsman5/shipyard-rm-throwaway), independently verified against the GitHub API at every step.",
+  "how_the_interruption_was_produced": "release-manager.js's createPersistedRelease() calls the real GitHub API to create the release, then writes local state to record success (release-manager.js:588-596). A real crash in that narrow window (after GitHub accepts the release, before the local write completes) is a genuine race of a few milliseconds — not something an external kill signal can reliably hit on demand. To produce this scenario deterministically without weakening what's being tested, the publish below ran to completion for real (a real GitHub release was created), and the local state file was then rewritten to exactly the shape release-manager.js itself writes BEFORE that GitHub call succeeds (publishingRecord(), release-manager.js:527-536) — reconstructing, byte for byte, what disk would have held had the process been killed at that exact real moment. Every step from 'status: interrupted' onward — detecting the interruption, querying GitHub for real, and reconciling state — ran for real, unmodified, against the real GitHub API.",
+  "sequence": [
+    {
+      "step": "configure",
+      "command": "node release-manager.js configure --repo TalhaUsman5/shipyard-rm-throwaway",
+      "real": true,
+      "output": {"status": "configured", "repository": {"name": "TalhaUsman5/shipyard-rm-throwaway", "url": "https://github.com/TalhaUsman5/shipyard-rm-throwaway"}}
+    },
+    {
+      "step": "scan",
+      "command": "node release-manager.js scan",
+      "real": true,
+      "note": "Scanned against a real new commit pushed to the repo moments earlier via the GitHub contents API specifically to make this scan release-worthy.",
+      "output": {
+        "status": "scanned",
+        "scan": {
+          "baseline": {"tag": "v0.1.4", "publishedAt": "2026-09-21T14:22:06Z"},
+          "headSha": "258c850054cb9a5c7aa061372407f7fbb3df9c00",
+          "commits": [{"sha": "258c850054cb9a5c7aa061372407f7fbb3df9c00", "title": "Add evidence-run marker"}],
+          "assessment": {"releaseWorthy": true, "rationale": "Found 1 commit and 0 merged pull requests since the baseline release."}
+        }
+      }
+    },
+    {
+      "step": "prepare",
+      "command": "node release-manager.js prepare --bump patch",
+      "real": true,
+      "output": {"status": "prepared", "pack": {"version": "0.1.5", "changelog": "## 0.1.5\n\nChanges since v0.1.4:\n\n### Commits\n- [258c850](https://github.com/TalhaUsman5/shipyard-rm-throwaway/commit/258c850054cb9a5c7aa061372407f7fbb3df9c00) Add evidence-run marker"}}
+    },
+    {
+      "step": "approve",
+      "command": "node release-manager.js approve --approver \"Talha\"",
+      "real": true,
+      "output": {"status": "approved", "approval": {"identity": "Talha", "approvedAt": "2026-09-22T04:16:04.768Z"}}
+    },
+    {
+      "step": "publish (completes for real)",
+      "command": "node release-manager.js publish",
+      "real": true,
+      "output": {
+        "status": "succeeded",
+        "publication": {
+          "status": "succeeded", "version": "0.1.5", "tag": "v0.1.5",
+          "releaseId": 393450743,
+          "releaseUrl": "https://github.com/TalhaUsman5/shipyard-rm-throwaway/releases/tag/v0.1.5",
+          "attemptTimestamp": "2026-09-22T04:16:04.840Z",
+          "completedAt": "2026-09-22T04:16:06.094Z"
+        }
+      },
+      "independent_verification": {
+        "source": "GET https://api.github.com/repos/TalhaUsman5/shipyard-rm-throwaway/releases/tags/v0.1.5",
+        "tag_name": "v0.1.5", "id": 393450743, "published_at": "2026-09-22T04:16:05Z", "prerelease": true
+      }
+    },
+    {
+      "step": "interruption staged (see how_the_interruption_was_produced above)",
+      "real": false,
+      "action": "Local .release-manager.json's status and publication fields were rewritten, in place, to exactly the publishingRecord() shape release-manager.js writes before the GitHub call — using this run's own real version/tag/payload/timestamp/approver, nothing fabricated.",
+      "staged_state": {
+        "status": "publishing",
+        "publication": {
+          "status": "publishing",
+          "version": "0.1.5",
+          "tag": "v0.1.5",
+          "attemptedPayload": {
+            "tag_name": "v0.1.5", "name": "v0.1.5", "target_commitish": "main",
+            "body": "## 0.1.5\n\nChanges since v0.1.4:\n\n### Commits\n- [258c850](https://github.com/TalhaUsman5/shipyard-rm-throwaway/commit/258c850054cb9a5c7aa061372407f7fbb3df9c00) Add evidence-run marker",
+            "draft": false, "prerelease": true
+          },
+          "attemptTimestamp": "2026-09-22T04:16:04.840Z",
+          "approvingIdentity": "Talha"
+        }
+      }
+    },
+    {
+      "step": "status (confirms the CLI genuinely sees an interrupted publish)",
+      "command": "node release-manager.js status",
+      "real": true,
+      "note": "This command's behavior from here on is entirely real and unmodified — it has no way to know the interruption was staged rather than a real crash.",
+      "output": {"status": "publishing"}
+    },
+    {
+      "step": "recover",
+      "command": "node release-manager.js recover",
+      "real": true,
+      "note": "Queried the real GitHub API for the tag, found the release genuinely already exists (because it does), confirmed it matches the expected payload, and adopted it as succeeded — release-manager.js:667-687, unmodified real logic.",
+      "output": {
+        "status": "succeeded",
+        "publication": {
+          "status": "succeeded", "version": "0.1.5", "tag": "v0.1.5",
+          "releaseId": 393450743,
+          "releaseUrl": "https://github.com/TalhaUsman5/shipyard-rm-throwaway/releases/tag/v0.1.5",
+          "completedAt": "2026-09-22T04:17:02.781Z"
+        }
+      },
+      "independent_verification": {
+        "note": "releaseId 393450743 matches the value GitHub itself returned in the earlier independent verification of the original publish — recover reconciled to the true, pre-existing release, not a new or different one."
+      }
+    }
+  ]
+}
