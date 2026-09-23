@@ -583,13 +583,16 @@ test('an unknown evidence-like path is a plain 404, not treated as exempt', asyn
 
 // --- Footer -------------------------------------------------------------------
 
-test('the shared footer contains exactly the three expected evidence links', async () => {
+test('the shared footer links to all three self-hosted evidence routes', async () => {
+  // Redesigned to keep every evidence link self-hosted rather than mixing
+  // in external GitHub links — matches the recorded lesson against adding
+  // external destinations merely to make a UI feel more client-facing.
   const server = await standardServer();
   try {
     const response = await request(server, { requestPath: '/' });
-    assert.match(response.body, /href="https:\/\/github\.com\/TalhaUsman5\/Shipyard\/blob\/main\/shipyard_dossier\.html"/);
-    assert.match(response.body, /href="https:\/\/github\.com\/TalhaUsman5\/Shipyard\/tree\/main\/evidence"/);
     assert.match(response.body, /href="\/evidence\/trace"/);
+    assert.match(response.body, /href="\/evidence\/session"/);
+    assert.match(response.body, /href="\/evidence\/events"/);
   } finally {
     await stopServer(server);
   }
