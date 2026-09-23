@@ -668,3 +668,188 @@ for (const missing of ['GITHUB_TOKEN', 'REVIEW_UI_USERNAME', 'REVIEW_UI_PASSWORD
     assert.match(output, new RegExp(`Missing required environment variable.*${missing}`));
   });
 }
+
+// --- Dark theme (prefers-color-scheme) ----------------------------------
+// unusedPort/delay/canConnect are the same helpers already defined above —
+// intentionally reused rather than redeclared.
+
+const os = require('node:os');
+
+const DARK_REQUIRED_PROPERTIES = [
+  '--page', '--surface', '--surface-soft', '--text', '--muted', '--border',
+  '--primary', '--primary-dark', '--primary-soft', '--danger', '--danger-dark',
+  '--success', '--shadow'
+];
+
+function darkWaitForServer(child, port, output) {
+  const deadline = Date.now() + 5000;
+  return (async () => {
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null) {
+        throw new Error(`server exited before listening (code ${child.exitCode}): ${output()}`);
+      }
+      if (await canConnect(port)) return;
+      await delay(30);
+    }
+    throw new Error(`server did not listen on port ${port}: ${output()}`);
+  })();
+}
+
+function darkRequestPage(port) {
+  const authorization = `Basic ${Buffer.from('dark-test-user:dark-test-password').toString('base64')}`;
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      host: '127.0.0.1',
+      port,
+      path: '/',
+      method: 'GET',
+      headers: { host: `127.0.0.1:${port}`, authorization, 'sec-ch-prefers-color-scheme': 'dark' }
+    }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(chunk));
+      response.on('end', () => resolve({
+        statusCode: response.statusCode,
+        contentType: response.headers['content-type'] || '',
+        body: Buffer.concat(chunks).toString('utf8')
+      }));
+    });
+    req.setTimeout(4000, () => req.destroy(new Error('request timed out')));
+    req.once('error', reject);
+    req.end();
+  });
+}
+
+function darkMatchingBrace(source, openingIndex) {
+  let depth = 0, quote = null, inComment = false;
+  for (let index = openingIndex; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+    if (inComment) {
+      if (character === '*' && next === '/') { inComment = false; index += 1; }
+      continue;
+    }
+    if (quote) {
+      if (character === '\\') index += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '/' && next === '*') { inComment = true; index += 1; }
+    else if (character === '"' || character === "'") quote = character;
+    else if (character === '{') depth += 1;
+    else if (character === '}') { depth -= 1; if (depth === 0) return index; }
+  }
+  return -1;
+}
+
+function darkMediaBlocks(css) {
+  const blocks = [];
+  const mediaPattern = /@media\s*\(\s*prefers-color-scheme\s*:\s*dark\s*\)\s*\{/gi;
+  let match;
+  while ((match = mediaPattern.exec(css)) !== null) {
+    const openingIndex = mediaPattern.lastIndex - 1;
+    const closingIndex = darkMatchingBrace(css, openingIndex);
+    assert.notEqual(closingIndex, -1, 'dark color-scheme media block must have balanced braces');
+    blocks.push(css.slice(openingIndex + 1, closingIndex));
+    mediaPattern.lastIndex = closingIndex + 1;
+  }
+  return blocks;
+}
+
+function darkRootBlocks(mediaBody) {
+  const blocks = [];
+  const rootPattern = /:root\s*\{/gi;
+  let match;
+  while ((match = rootPattern.exec(mediaBody)) !== null) {
+    const openingIndex = rootPattern.lastIndex - 1;
+    const closingIndex = darkMatchingBrace(mediaBody, openingIndex);
+    assert.notEqual(closingIndex, -1, 'dark :root rule must have balanced braces');
+    blocks.push(mediaBody.slice(openingIndex + 1, closingIndex));
+    rootPattern.lastIndex = closingIndex + 1;
+  }
+  return blocks;
+}
+
+function darkCustomPropertyDeclarations(css) {
+  const declarations = [];
+  const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const declarationPattern = /(--[a-z0-9-]+)\s*:\s*([^;{}]+)(?:;|(?=\s*(?:}|$)))/gi;
+  let match;
+  while ((match = declarationPattern.exec(withoutComments)) !== null) {
+    declarations.push({ name: match[1], value: match[2].trim() });
+  }
+  return declarations;
+}
+
+test('served review console CSS defines every required role in a prefers-color-scheme dark override', { timeout: 15000 }, async () => {
+  const port = await unusedPort();
+  const cliDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'review-console-dark-theme-'));
+  const darkCliFile = path.join(cliDirectory, 'release-manager.js');
+  let child;
+  let output = '';
+
+  try {
+    await fs.writeFile(darkCliFile, [
+      '#!/usr/bin/env node',
+      "'use strict';",
+      "process.stdout.write(JSON.stringify({ repository: { name: 'octo/dark-theme' }, approval: { state: 'pending' } }));"
+    ].join('\n'), { encoding: 'utf8', mode: 0o755 });
+
+    child = spawn(process.execPath, ['server.js'], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GITHUB_TOKEN: 'dark-theme-test-token',
+        REVIEW_UI_USERNAME: 'dark-test-user',
+        REVIEW_UI_PASSWORD: 'dark-test-password',
+        PUBLIC_ORIGIN: `http://127.0.0.1:${port}`,
+        LISTEN_HOST: '127.0.0.1',
+        PORT: String(port),
+        RELEASE_MANAGER_CLI_CWD: cliDirectory
+      },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    child.stdout.on('data', chunk => { output += chunk.toString(); });
+    child.stderr.on('data', chunk => { output += chunk.toString(); });
+
+    await darkWaitForServer(child, port, () => output);
+    const response = await darkRequestPage(port);
+    assert.equal(response.statusCode, 200, output || response.body);
+    assert.match(response.contentType, /^text\/html(?:;|$)/i);
+
+    const styles = Array.from(response.body.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi), m => m[1]);
+    assert.ok(styles.length > 0, 'the served review console must contain CSS');
+
+    const mediaBlocks = styles.flatMap(darkMediaBlocks);
+    assert.ok(mediaBlocks.length > 0, 'served CSS must contain @media (prefers-color-scheme: dark)');
+
+    const expected = [...DARK_REQUIRED_PROPERTIES].sort();
+    const qualifyingBlock = mediaBlocks.find(mediaBody => {
+      const declarations = darkCustomPropertyDeclarations(mediaBody);
+      const names = declarations.map(d => d.name).sort();
+      return names.length === expected.length && names.every((name, index) => name === expected[index]);
+    });
+    assert.ok(qualifyingBlock, `one dark media block must redefine exactly these custom properties: ${DARK_REQUIRED_PROPERTIES.join(', ')}`);
+
+    const roots = darkRootBlocks(qualifyingBlock);
+    assert.ok(roots.length > 0, 'dark custom-property overrides must be declared on :root');
+    const rootDeclarations = roots.flatMap(darkCustomPropertyDeclarations);
+    const rootNames = rootDeclarations.map(d => d.name).sort();
+    assert.deepEqual(rootNames, expected, 'all required dark overrides must participate in the existing :root cascade');
+
+    for (const property of DARK_REQUIRED_PROPERTIES) {
+      const matches = rootDeclarations.filter(d => d.name === property);
+      assert.equal(matches.length, 1, `${property} must be explicitly redefined exactly once in dark :root`);
+      assert.ok(matches[0].value.length > 0, `${property} must have a non-empty dark-theme value`);
+      assert.doesNotMatch(matches[0].value, /^(?:initial|inherit|unset|revert|revert-layer)$/i, `${property} must have an explicit usable dark-theme value`);
+    }
+  } finally {
+    if (child && child.exitCode === null) {
+      const exited = new Promise(resolve => child.once('exit', resolve));
+      child.kill('SIGTERM');
+      const timer = setTimeout(() => child.kill('SIGKILL'), 1000);
+      await exited;
+      clearTimeout(timer);
+    }
+    await fs.rm(cliDirectory, { recursive: true, force: true });
+  }
+});
